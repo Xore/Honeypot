@@ -173,6 +173,10 @@ jobs:
       - name: YARA local pre-scan
         id: yara
         if: steps.find_samples.outputs.count != '0'
+        # Non-fatal like generate_yara.py below: a bug in this pre-scan
+        # (e.g. the grep/-gt cascade fixed 2026-07-26) must not skip the
+        # actual scanner analysis, PDF report, and commit steps that follow.
+        continue-on-error: true
         run: |
           set -euo pipefail
           YARA_HITS=0
@@ -193,7 +197,11 @@ jobs:
                   yara "$rulefile" "$sample" 2>/dev/null >> "$REPORT" || true
                 done
           done < /tmp/changed_files.txt
-          YARA_HITS=$(grep -c '.' "$REPORT" 2>/dev/null || echo 0)
+          # `grep -c` prints "0" AND exits 1 when there are no matches, so a
+          # `|| echo 0` fallback double-counts (YARA_HITS becomes "0\n0",
+          # which then blows up the `-gt` integer comparison below). Let
+          # grep's own count stand and only fall back if it errored outright.
+          YARA_HITS=$(grep -c '.' "$REPORT" 2>/dev/null) || YARA_HITS=0
           echo "YARA hits: $YARA_HITS"
           echo "yara_hits=$YARA_HITS" >> "$GITHUB_OUTPUT"
           if [ "$YARA_HITS" -gt 0 ]; then
