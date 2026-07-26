@@ -317,12 +317,17 @@ def parse_report(report_path: Path, sample_dir: Path) -> dict | None:
     results  = data.get('results', {})
 
     # Resolve sample path (may have been moved / archived)
-    sample_path: Path | None = None
-    for candidate in [
+    # Note: starred expression in list literal requires Python 3.9+;
+    # use explicit extend to stay compatible with 3.8.
+    candidates = [
         Path(data.get('file', '')),
         sample_dir / filename,
-        *list(sample_dir.rglob(filename)) if filename else [],
-    ]:
+    ]
+    if filename:
+        candidates.extend(sample_dir.rglob(filename))
+
+    sample_path: Path | None = None
+    for candidate in candidates:
         if candidate and candidate.exists() and candidate.is_file():
             sample_path = candidate
             break

@@ -107,10 +107,12 @@ jobs:
             ${{ runner.os }}-pip-
 
       - name: Cache apt packages
+        # Cache only the downloaded .deb files, not the lock/partial dirs
+        # which are owned by root and cannot be archived by the runner user.
         uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684
         with:
-          path: /var/cache/apt/archives
-          key: ${{ runner.os }}-apt-honeypot-v1
+          path: /var/cache/apt/archives/*.deb
+          key: ${{ runner.os }}-apt-honeypot-v2
 
       - name: Install dependencies
         run: |
