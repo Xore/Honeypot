@@ -5,7 +5,7 @@ generate_yara.py — Auto-generate YARA rules from scanner JSON reports.
 Pipeline position: runs AFTER analyze_samples.py, reads its JSON output.
 
 What it does
-────────────
+────────
 1. Reads every *.json report in --report-dir (written by analyze_samples.py).
 2. For each report it builds a "profile" containing:
    - Detected family names from VirusTotal (names[] + scan results)
@@ -23,6 +23,8 @@ What it does
 6. Validates every generated rule with `yara --compile` before saving.
    Invalid rules are written to yara-rules/auto/_invalid/ for manual review.
 7. Exits 0 always — a rule-gen failure must never abort the scan pipeline.
+8. Skips any report whose sha256 is already tracked in GENERATED.md to avoid
+   re-processing samples on re-runs.
 
 Output
 ──────
@@ -62,7 +64,7 @@ logging.basicConfig(
 )
 log = logging.getLogger('honeypot.yara_gen')
 
-# ── Constants ────────────────────────────────────────────────────────────────
+# ── Constants ───────────────────────────────────────────────────────────────
 
 MIN_STRING_LEN   = 8    # minimum printable-string length to consider
 MAX_STRINGS      = 20   # max string conditions per rule
@@ -100,7 +102,12 @@ VT_PREFIXES = re.compile(
 )
 
 
-# ── Utilities ────────────────────────────────────────────────────────────────
+# ── Utilities ───────────────────────────────────────────────────────────────
+
+def _safe_list(val) -> list:
+    """Return val if it's a non-None list, else []."""
+    return val if isinstance(val, list) else []
+
 
 def normalise_family(raw: str) -> Optional[str]:
     """Strip AV vendor noise and return a clean family identifier, or None."""
@@ -277,18 +284,18 @@ def collect_family_names(report: dict) -> list[str]:
 
     # VirusTotal: names[] field
     vt = results.get('VirusTotalScanner', {})
-    names.extend(vt.get('names', []))
+    names.extend(_safe_list(vt.get('names')))
 
     # VirusTotal: individual engine results (if present)
     for engine_result in vt.get('scans', {}).values() if isinstance(vt.get('scans'), dict) else []:
         if isinstance(engine_result, dict) and engine_result.get('result'):
             names.append(engine_result['result'])
 
-    # MalwareBazaar: signature
+    # MalwareBazaar: signature + tags (both may be null in JSON)
     mb = results.get('MalwareBazaarScanner', {})
     if sig := mb.get('signature'):
         names.append(sig)
-    names.extend(mb.get('tags', []))
+    names.extend(_safe_list(mb.get('tags')))
 
     # CAPE: family
     cape = results.get('CAPESandboxScanner', {})
@@ -317,8 +324,6 @@ def parse_report(report_path: Path, sample_dir: Path) -> dict | None:
     results  = data.get('results', {})
 
     # Resolve sample path (may have been moved / archived)
-    # Note: starred expression in list literal requires Python 3.9+;
-    # use explicit extend to stay compatible with 3.8.
     candidates = [
         Path(data.get('file', '')),
         sample_dir / filename,
@@ -332,16 +337,15 @@ def parse_report(report_path: Path, sample_dir: Path) -> dict | None:
             sample_path = candidate
             break
 
-    # Determine file type from VT or magic
-    file_type = ''
+    # Determine file type from VT or MB
     vt = results.get('VirusTotalScanner', {})
-    file_type = vt.get('type_description', '') or results.get('MalwareBazaarScanner', {}).get('file_type', '')
+    mb = results.get('MalwareBazaarScanner', {})
+    file_type = vt.get('type_description', '') or mb.get('file_type', '') or ''
 
     # Gather references
     refs = []
     if vt.get('permalink'):
         refs.append(vt['permalink'])
-    mb = results.get('MalwareBazaarScanner', {})
     if mb.get('permalink'):
         refs.append(mb['permalink'])
 
@@ -363,7 +367,7 @@ def parse_report(report_path: Path, sample_dir: Path) -> dict | None:
         'family_names':   family_names,
         'binary_strings': binary_strings,
         'references':     refs,
-        'tags':           mb.get('tags', []),
+        'tags':           _safe_list(mb.get('tags')),
     }
 
 
@@ -379,6 +383,28 @@ def load_existing_rules(output_dir: Path) -> dict[str, Path]:
             continue
         existing[f.stem.lower()] = f
     return existing
+
+
+def load_processed_sha256s(output_dir: Path) -> set[str]:
+    """
+    Read sha256 hashes already recorded in GENERATED.md's embedded rule meta.
+    This prevents re-processing the same sample on repeated workflow runs.
+    We also scan all existing .yar files for sample_sha256 meta lines.
+    """
+    seen: set[str] = set()
+    if not output_dir.exists():
+        return seen
+    for yar in output_dir.glob('*.yar'):
+        if yar.stem.startswith('_'):
+            continue
+        try:
+            for line in yar.read_text().splitlines():
+                m = re.search(r'sample_sha256\s*=\s*"([0-9a-f]{64})"', line)
+                if m:
+                    seen.add(m.group(1))
+        except Exception:
+            pass
+    return seen
 
 
 def append_new_strings_to_rule(rule_path: Path, new_strings: list[str]) -> bool:
@@ -429,7 +455,7 @@ def generate_index(output_dir: Path, new_rules: list[str], updated_rules: list[s
     for f in sorted(output_dir.glob('*.yar')):
         if f.stem.startswith('_'):
             continue
-        status = '🆕 new' if f.stem in new_rules else ('🔄 updated' if f.stem in updated_rules else '✅ existing')
+        status = '\U0001f195 new' if f.stem in new_rules else ('\U0001f504 updated' if f.stem in updated_rules else '✅ existing')
         lines.append(f'| `{f.name}` | {status} |')
 
     lines += ['', '## Notes',
@@ -453,11 +479,22 @@ def run(report_dir: Path, sample_dir: Path, output_dir: Path) -> int:
 
     log.info(f'Processing {len(reports)} report(s) from {report_dir}')
 
+    # Load sha256s already embedded in existing .yar files to skip re-processing
+    processed_sha256s = load_processed_sha256s(output_dir)
+    if processed_sha256s:
+        log.info(f'Already processed sha256s: {len(processed_sha256s)} (will skip)')
+
     # Group profiles by normalised family name
     family_map: dict[str, list[dict]] = defaultdict(list)
+    skipped_existing = 0
     for rp in reports:
         profile = parse_report(rp, sample_dir)
         if not profile:
+            continue
+        # Skip samples whose sha256 is already recorded in an existing .yar rule
+        if profile['sha256'] and profile['sha256'] in processed_sha256s:
+            log.info(f'  Skipping already-processed sample: {profile["filename"]} ({profile["sha256"][:16]}…)')
+            skipped_existing += 1
             continue
         raw_names = profile['family_names']
         families  = {normalise_family(n) for n in raw_names}
@@ -468,8 +505,11 @@ def run(report_dir: Path, sample_dir: Path, output_dir: Path) -> int:
         for fam in families:
             family_map[fam].append(profile)
 
+    if skipped_existing:
+        log.info(f'Skipped {skipped_existing} already-processed report(s)')
+
     if not family_map:
-        log.info('No families could be extracted from reports.')
+        log.info('No new families to process.')
         return 0
 
     log.info(f'Identified {len(family_map)} unique family/cluster(s)')
@@ -557,7 +597,7 @@ def run(report_dir: Path, sample_dir: Path, output_dir: Path) -> int:
     return 0
 
 
-# ── Entry point ──────────────────────────────────────────────────────────────
+# ── Entry point ───────────────────────────────────────────────────────────────
 
 def main():
     parser = argparse.ArgumentParser(
