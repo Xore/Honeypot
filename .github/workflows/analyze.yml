@@ -7,10 +7,7 @@
 #       a) No scanner API key secrets are set at all
 #       b) File list cannot be read
 #       c) Every scanner errored on every file (exit 2)
-#   - The "Commit reports" step runs even if scanning partially failed
-#     (uses: if: always() + check for report files)
-#   - Deleted files are NEVER scanned — git diff is filtered to
-#     added/modified files only (status A, C, M, R).
+#   - Deleted files are NEVER scanned (--diff-filter=ACMR)
 
 name: Malware Analysis Pipeline
 
@@ -126,6 +123,7 @@ jobs:
           exit 0
 
       - name: Generate PDF report
+        id: pdf
         if: always() && steps.find_samples.outputs.count != '0'
         env:
           GITHUB_REPO:   ${{ github.repository }}
@@ -137,7 +135,6 @@ jobs:
             --input-dir reports/scanner/ \
             --output    "$PDF"
           echo "pdf_path=$PDF" >> "$GITHUB_OUTPUT"
-        id: pdf
 
       - name: Upload PDF as artifact
         if: always() && steps.find_samples.outputs.count != '0'

@@ -50,16 +50,16 @@ log = logging.getLogger('honeypot.scanner')
 ARCHIVE_EXTS = {'.zip', '.7z', '.tar', '.gz', '.tgz', '.bz2', '.tbz2', '.xz', '.rar'}
 
 SCANNABLE_MAGIC = [
-    b'MZ',                 # Windows PE
-    b'\x7fELF',            # Linux ELF
-    b'\xca\xfe\xba\xbe',  # Mach-O fat
-    b'\xfe\xed\xfa\xce',  # Mach-O 32
-    b'\xfe\xed\xfa\xcf',  # Mach-O 64
-    b'PK\x03\x04',        # ZIP/JAR/Office
-    b'%PDF',               # PDF
-    b'{\\rtf',            # RTF
-    b'\xd0\xcf\x11\xe0',  # OLE2 / legacy Office
-    b'#!/',                # shell/script shebang
+    b'MZ',
+    b'\x7fELF',
+    b'\xca\xfe\xba\xbe',
+    b'\xfe\xed\xfa\xce',
+    b'\xfe\xed\xfa\xcf',
+    b'PK\x03\x04',
+    b'%PDF',
+    b'{\\rtf',
+    b'\xd0\xcf\x11\xe0',
+    b'#!/',
 ]
 
 MAX_UPLOAD_SIZE = 32 * 1024 * 1024  # 32 MB
@@ -68,7 +68,6 @@ MAX_UPLOAD_SIZE = 32 * 1024 * 1024  # 32 MB
 # ── Result helpers ───────────────────────────────────────────────────────────
 
 def _err(source: str, msg: str, exc: Exception = None) -> dict:
-    """Uniform error result — never raises, always returns a dict."""
     result = {'source': source, 'status': 'failed', 'error': msg}
     if exc:
         result['traceback'] = traceback.format_exc(limit=5)
@@ -176,13 +175,6 @@ def expand_file(path: Path, passwords: list, tmpdir: Path) -> list:
 # ── Scanner base ───────────────────────────────────────────────────────────────
 
 class BaseScanner:
-    """All scanners inherit this. scan() is the only public method.
-
-    Contract:
-      - scan() MUST return a dict.
-      - scan() MUST NOT raise — all exceptions are caught internally.
-      - On any error the dict contains {status: 'failed', error: '...'}.
-    """
     NAME = 'base'
 
     def scan(self, path: Path, hashes: dict, wait: bool = True) -> dict:
@@ -198,11 +190,6 @@ class BaseScanner:
 # ── Scanner 1: VirusTotal v3 ─────────────────────────────────────────────────
 
 class VirusTotalScanner(BaseScanner):
-    """
-    VirusTotal v3 — 70+ AV engines.
-    Free: 4 req/min, 500 uploads/day.
-    https://developers.virustotal.com/reference
-    """
     NAME = 'VirusTotal'
     BASE = 'https://www.virustotal.com/api/v3'
 
@@ -234,8 +221,7 @@ class VirusTotalScanner(BaseScanner):
                 'permalink':  f'https://www.virustotal.com/gui/file/{sha256}',
             }
         if r.status_code == 404:
-            return None   # unknown — must upload
-        # 429 rate-limit, 403 quota exceeded, etc. — return error, do NOT raise
+            return None  # unknown — must upload
         return _err(self.NAME, f'lookup HTTP {r.status_code}: {r.text[:120]}')
 
     def _upload(self, path):
@@ -251,7 +237,6 @@ class VirusTotalScanner(BaseScanner):
         with open(path, 'rb') as fh:
             r = requests.post(url, headers=self.hdrs,
                               files={'file': (path.name, fh)}, timeout=120)
-        # FIX: was raise_for_status() — now returns error dict instead of raising
         if r.status_code not in (200, 201):
             return _err(self.NAME, f'upload HTTP {r.status_code}: {r.text[:120]}')
         aid = r.json().get('data', {}).get('id')
@@ -263,7 +248,6 @@ class VirusTotalScanner(BaseScanner):
         }
 
     def _poll(self, aid, permalink):
-        """FIX: preserve analysis_id + permalink even on timeout."""
         base = {
             'source': 'virustotal', 'known': False,
             'analysis_id': aid, 'permalink': permalink,
@@ -287,7 +271,6 @@ class VirusTotalScanner(BaseScanner):
                 }
             log.info(f'  VT poll [{attempt+1}/24] status={status}')
             time.sleep(30)
-        # Timeout — return partial result with permalink intact
         return {**base, 'status': 'timeout',
                 'note': 'Analysis queued; check permalink for results'}
 
@@ -297,7 +280,6 @@ class VirusTotalScanner(BaseScanner):
             if result.get('status') != 'failed':
                 log.info(f'  VT: known → {result["positives"]}/{result["total"]}')
             return result
-        # Hash unknown — upload
         log.info(f'  VT: uploading {path.name}...')
         upload = self._upload(path)
         if upload.get('status') == 'failed':
@@ -310,10 +292,6 @@ class VirusTotalScanner(BaseScanner):
 # ── Scanner 2: MalwareBazaar ───────────────────────────────────────────────
 
 class MalwareBazaarScanner(BaseScanner):
-    """
-    abuse.ch MalwareBazaar — community malware DB.
-    Free. https://bazaar.abuse.ch/api/
-    """
     NAME = 'MalwareBazaar'
     BASE = 'https://mb-api.abuse.ch/api/v1/'
 
@@ -370,8 +348,11 @@ class MalwareBazaarScanner(BaseScanner):
 
 class HybridAnalysisScanner(BaseScanner):
     """
-    Hybrid-Analysis / Falcon Sandbox — dynamic analysis.
-    Free tier. https://www.hybrid-analysis.com/docs/api/v2
+    FIX: _lookup previously called r.raise_for_status() which raised an
+    exception on 404 (hash not known yet). The BaseScanner wrapper caught
+    that and marked the entire scanner as failed — the submit path was
+    never reached. Now 404 is explicitly handled as "hash unknown" → None,
+    which triggers _submit().
     """
     NAME = 'HybridAnalysis'
     BASE = 'https://www.hybrid-analysis.com/api/v2'
@@ -384,23 +365,31 @@ class HybridAnalysisScanner(BaseScanner):
         }
 
     def _lookup(self, sha256):
-        r = requests.get(f'{self.BASE}/search/hash',
-                         params={'hash': sha256},
-                         headers=self.hdrs, timeout=30)
-        r.raise_for_status()
+        r = requests.get(
+            f'{self.BASE}/search/hash',
+            params={'hash': sha256},
+            headers=self.hdrs,
+            timeout=30,
+        )
+        # 404 = hash not in HA database yet — not an error, upload needed
+        if r.status_code == 404:
+            return None
+        # Any other non-200 is a real error
+        if r.status_code != 200:
+            return _err(self.NAME, f'lookup HTTP {r.status_code}: {r.text[:120]}')
         data = r.json()
-        if data:
-            t = data[0]
-            return {
-                'source': 'hybrid_analysis', 'known': True,
-                'verdict':      t.get('verdict'),
-                'threat_score': t.get('threat_score'),
-                'threat_level': t.get('threat_level_human'),
-                'av_detect':    t.get('av_detect'),
-                'job_id':       t.get('job_id'),
-                'permalink':    f'https://www.hybrid-analysis.com/sample/{sha256}',
-            }
-        return None
+        if not data:
+            return None  # empty list = unknown
+        t = data[0]
+        return {
+            'source': 'hybrid_analysis', 'known': True,
+            'verdict':      t.get('verdict'),
+            'threat_score': t.get('threat_score'),
+            'threat_level': t.get('threat_level_human'),
+            'av_detect':    t.get('av_detect'),
+            'job_id':       t.get('job_id'),
+            'permalink':    f'https://www.hybrid-analysis.com/sample/{sha256}',
+        }
 
     def _submit(self, path, env_id=120):
         with open(path, 'rb') as fh:
@@ -422,20 +411,18 @@ class HybridAnalysisScanner(BaseScanner):
 
     def _scan(self, path, hashes, **_):
         result = self._lookup(hashes['sha256'])
-        if result:
-            log.info(f'  HybridAnalysis: known → verdict={result.get("verdict")}')
+        if result is None:
+            log.info(f'  HybridAnalysis: unknown hash, submitting {path.name}...')
+            return self._submit(path)
+        if result.get('status') == 'failed':
             return result
-        log.info(f'  HybridAnalysis: submitting {path.name}...')
-        return self._submit(path)
+        log.info(f'  HybridAnalysis: known → verdict={result.get("verdict")}')
+        return result
 
 
 # ── Scanner 4: Malshare ───────────────────────────────────────────────────────
 
 class MalshareScanner(BaseScanner):
-    """
-    Malshare — community malware repository.
-    Free, 2000 req/day. https://malshare.com/doc.php
-    """
     NAME = 'Malshare'
     BASE = 'https://malshare.com/api.php'
 
@@ -480,11 +467,6 @@ class MalshareScanner(BaseScanner):
 # ── Scanner 5: JoeSandbox ────────────────────────────────────────────────────
 
 class JoeSandboxScanner(BaseScanner):
-    """
-    JoeSandbox Cloud — deep behavioural analysis.
-    Community (free/public) or paid.
-    https://jbxcloud.joesecurity.org/userguide?sphinxurl=usage/webapi.html
-    """
     NAME = 'JoeSandbox'
     BASE = 'https://www.joesandbox.com/api/v2'
 
@@ -537,9 +519,11 @@ class JoeSandboxScanner(BaseScanner):
 
 class MetaDefenderScanner(BaseScanner):
     """
-    MetaDefender Cloud — 37+ AV engines (OPSWAT).
-    Free: unlimited hash lookups, 10 uploads/day.
-    https://onlinehelp.opswat.com/mdcloud/
+    FIX: _lookup previously called r.raise_for_status() which raised an
+    exception on 404 (hash not in MetaDefender DB). Now 404 is handled
+    explicitly as "hash unknown" → None, triggering _upload().
+    Also fixed: non-200 responses (401, 429, 5xx) return _err() dict
+    instead of raising, keeping the failure-contract intact.
     """
     NAME = 'MetaDefender'
     BASE = 'https://api.metadefender.com/v4'
@@ -548,9 +532,17 @@ class MetaDefenderScanner(BaseScanner):
         self.hdrs = {'apikey': key}
 
     def _lookup(self, sha256):
-        r = requests.get(f'{self.BASE}/hash/{sha256}',
-                         headers=self.hdrs, timeout=30)
-        r.raise_for_status()
+        r = requests.get(
+            f'{self.BASE}/hash/{sha256}',
+            headers=self.hdrs,
+            timeout=30,
+        )
+        # 404 = hash not in MetaDefender yet — not an error, upload needed
+        if r.status_code == 404:
+            return None
+        # 401 = invalid API key, 429 = quota exceeded, etc.
+        if r.status_code != 200:
+            return _err(self.NAME, f'lookup HTTP {r.status_code}: {r.text[:120]}')
         d    = r.json()
         scan = d.get('scan_results', {})
         if scan.get('scan_all_result_i') is not None:
@@ -562,6 +554,7 @@ class MetaDefenderScanner(BaseScanner):
                 'file_info':   d.get('file_info', {}),
                 'permalink':   f'https://metadefender.opswat.com/results/file/{sha256}/regular/overview',
             }
+        # 200 but no scan_results yet (queued) — treat as unknown
         return None
 
     def _upload(self, path):
@@ -604,25 +597,23 @@ class MetaDefenderScanner(BaseScanner):
 
     def _scan(self, path, hashes, wait=True):
         result = self._lookup(hashes['sha256'])
-        if result:
-            log.info(f'  MetaDefender: known → {result["positives"]}/{result["total"]}')
-            return result
-        log.info(f'  MetaDefender: uploading {path.name}...')
-        upload = self._upload(path)
-        if upload.get('status') == 'failed':
+        if result is None:
+            log.info(f'  MetaDefender: unknown hash, uploading {path.name}...')
+            upload = self._upload(path)
+            if upload.get('status') == 'failed':
+                return upload
+            if wait and upload.get('data_id'):
+                return self._poll(upload['data_id'], upload['permalink'])
             return upload
-        if wait and upload.get('data_id'):
-            return self._poll(upload['data_id'], upload['permalink'])
-        return upload
+        if result.get('status') == 'failed':
+            return result
+        log.info(f'  MetaDefender: known → {result["positives"]}/{result["total"]}')
+        return result
 
 
 # ── Scanner 7: CAPE Sandbox ───────────────────────────────────────────────────
 
 class CAPESandboxScanner(BaseScanner):
-    """
-    CAPE Sandbox — Cuckoo fork, config extraction, memory dumps.
-    Self-hosted or public: https://capesandbox.com
-    """
     NAME = 'CAPE'
 
     def __init__(self, base_url, api_key=None):
@@ -673,10 +664,6 @@ class CAPESandboxScanner(BaseScanner):
 # ── Scanner 8: Any.run ────────────────────────────────────────────────────────
 
 class AnyRunScanner(BaseScanner):
-    """
-    Any.run — interactive cloud sandbox.
-    Paid API required. https://any.run/api-documentation/
-    """
     NAME = 'AnyRun'
     BASE = 'https://api.any.run/v1'
 
@@ -736,15 +723,10 @@ def extract_iocs(report: dict, ioc_dir: Path):
                 f.write(f'{sha256},{name}\n')
 
 
-# ── Core scan function ──────────────────────────────────────────────────────────
+# ── Core scan function ─────────────────────────────────────────────────────────
 
 def scan_file(path: Path, scanners: list, output_dir: Path,
               ioc_dir: Path, wait: bool) -> dict:
-    """
-    FIX: report is initialised BEFORE scanners run and written in a
-    finally block — so it is ALWAYS committed even if every scanner fails.
-    """
-    # Step 1: hash (can fail — treat as hard error for this file only)
     try:
         hashes = hash_file(path)
     except Exception as e:
@@ -757,7 +739,6 @@ def scan_file(path: Path, scanners: list, output_dir: Path,
     log.info(f'SHA256   : {sha256}')
     log.info(f'Size     : {hashes["size"]:,} bytes')
 
-    # Initialise report immediately — written in finally regardless
     report = {
         'file':       str(path),
         'filename':   path.name,
@@ -773,13 +754,10 @@ def scan_file(path: Path, scanners: list, output_dir: Path,
         for scanner in scanners:
             cls = scanner.__class__.__name__
             log.info(f'  → {scanner.NAME}')
-            # BaseScanner.scan() never raises — always returns a dict
             result = scanner.scan(path, hashes, wait=wait)
             report['results'][cls] = result
-            # Flag whether this scanner succeeded
             report['results'][cls]['_ok'] = 'error' not in result
     finally:
-        # ALWAYS write the report, even if the loop above crashed mid-way
         output_dir.mkdir(parents=True, exist_ok=True)
         out = output_dir / f'{sha256}.json'
         out.write_text(json.dumps(report, indent=2))
@@ -816,7 +794,6 @@ def build_scanners() -> list:
         log.info(f'[+] CAPE enabled ({url})')
 
     if not scanners:
-        # HARD FAIL: no API keys configured at all
         log.error('FATAL: No scanner API keys configured.')
         log.error('Set at least one of: VT_API_KEY, MALWAREBAZAAR_API_KEY, etc.')
         sys.exit(1)
@@ -838,7 +815,7 @@ def main():
     passwords  = [p.strip() for p in args.archive_passwords.split(',') if p.strip()]
     output_dir = Path(args.output_dir)
     ioc_dir    = Path(args.ioc_dir)
-    scanners   = build_scanners()   # exits 1 if no keys
+    scanners   = build_scanners()
     tmpdir     = Path(tempfile.mkdtemp(prefix='honeypot_scan_'))
 
     try:
@@ -861,8 +838,8 @@ def main():
     log.info(f'Wait      : {args.wait_results}')
 
     all_reports   = []
-    scanner_ok    = 0   # files where ≥1 scanner succeeded
-    scanner_total = 0   # files attempted
+    scanner_ok    = 0
+    scanner_total = 0
 
     try:
         for line in lines:
@@ -882,7 +859,6 @@ def main():
                 r = scan_file(f, scanners, output_dir, ioc_dir, args.wait_results)
                 if r:
                     all_reports.append(r)
-                    # Count as OK if at least one scanner result has no error
                     any_ok = any(
                         v.get('_ok') for v in r.get('results', {}).values()
                     )
@@ -891,7 +867,6 @@ def main():
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
 
-    # ── Summary ───────────────────────────────────────────────────
     log.info(f'\n{"="*60}')
     log.info(f'Scanned : {scanner_total} file(s)')
     for r in all_reports:
@@ -902,7 +877,6 @@ def main():
         log.info(f'  {r["sha256"][:16]}… {r["filename"]:30s}  VT:{vt_str}  MD:{md_str}')
 
     if scanner_total > 0 and scanner_ok == 0:
-        # Every single scanner errored on every file — hard fail
         log.error('FATAL: All scanners failed on all files. Check API keys and network.')
         sys.exit(2)
 
