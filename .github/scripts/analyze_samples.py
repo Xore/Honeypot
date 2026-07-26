@@ -450,6 +450,14 @@ class MalwareBazaarScanner(BaseScanner):
 # FIX (2026-07-d): _lookup now guards against non-list responses (e.g. error
 #   dicts) from /search/hash to prevent KeyError: 0.
 #
+# FIX (2026-07-e): BASE used the `www` subdomain, which 301-redirects to the
+#   bare domain. `requests` follows redirects but downgrades POST to GET on a
+#   301/302 (RFC 7231 legacy behavior), so every _submit() silently became a
+#   GET /submit/file — no such route, hence the same 404 "Requested URI - Not
+#   Found" every time, independent of key tier or payload. _lookup() already
+#   used GET so it was unaffected and masked the real cause. Point BASE at the
+#   bare domain directly to avoid the redirect entirely.
+#
 # Current environment IDs per API v2 docs:
 #   100 = Windows 7 32-bit
 #   110 = Windows 7 32-bit (HWP Support)
@@ -462,7 +470,7 @@ class MalwareBazaarScanner(BaseScanner):
 
 class HybridAnalysisScanner(BaseScanner):
     NAME = 'HybridAnalysis'
-    BASE = 'https://www.hybrid-analysis.com/api/v2'
+    BASE = 'https://hybrid-analysis.com/api/v2'
 
     def __init__(self, key):
         self.hdrs = {
