@@ -447,6 +447,9 @@ class MalwareBazaarScanner(BaseScanner):
 #   API v2 changelog — sending it causes HTTP 404 "Requested URI - Not Found".
 #   Removed from _submit() data payload.
 #
+# FIX (2026-07-d): _lookup now guards against non-list responses (e.g. error
+#   dicts) from /search/hash to prevent KeyError: 0.
+#
 # Current environment IDs per API v2 docs:
 #   100 = Windows 7 32-bit
 #   110 = Windows 7 32-bit (HWP Support)
@@ -480,7 +483,8 @@ class HybridAnalysisScanner(BaseScanner):
         if r.status_code != 200:
             return _err(self.NAME, f'lookup HTTP {r.status_code}: {r.text[:120]}')
         data = r.json()
-        if not data:
+        # Guard: API may return an error dict instead of a list
+        if not isinstance(data, list) or len(data) == 0:
             return None
         t = data[0]
         return {
@@ -494,9 +498,6 @@ class HybridAnalysisScanner(BaseScanner):
         }
 
     def _submit(self, path, env_id=120):
-        # env_id 120 = Windows 7 64-bit (default, broadest malware compatibility)
-        # NOTE: `allow_community_access` was removed from the API and must NOT
-        # be sent — it causes HTTP 404 "Requested URI - Not Found".
         with open(path, 'rb') as fh:
             r = requests.post(
                 f'{self.BASE}/submit/file',
@@ -630,7 +631,11 @@ class JoeSandboxScanner(BaseScanner):
 #
 # FIX (2026-07-a): SSLEOFError on large uploads → retry Session + explicit
 #   Content-Type / Content-Length headers + 180s timeout.
-# FIX (2026-07-b): Permalink URL corrected.
+# FIX (2026-07-b): Permalink now built from data_id returned by the API,
+#   not the sha256. The /hash/{sha256} lookup response includes a data_id
+#   field which is the base64-encoded ID used in the MetaDefender portal URL:
+#   https://metadefender.com/results/file/{data_id}/threats-prevented
+#   Using raw sha256 as the URL path does not resolve.
 
 class MetaDefenderScanner(BaseScanner):
     NAME = 'MetaDefender'
@@ -642,7 +647,7 @@ class MetaDefenderScanner(BaseScanner):
 
     @staticmethod
     def _permalink(data_id: str) -> str:
-        return f'https://metadefender.com/results/file/{data_id}/overview'
+        return f'https://metadefender.com/results/file/{data_id}/threats-prevented'
 
     def _lookup(self, sha256):
         r = self.session.get(
@@ -657,13 +662,17 @@ class MetaDefenderScanner(BaseScanner):
         d    = r.json()
         scan = d.get('scan_results', {})
         if scan.get('scan_all_result_i') is not None:
+            # data_id is the base64 encoded ID used in portal URLs.
+            # Fall back to sha256 only if missing (should not happen).
+            data_id = d.get('data_id') or sha256
             return {
                 'source': 'metadefender', 'known': True,
                 'positives':   scan.get('total_detected_avs', 0),
                 'total':       scan.get('total_avs', 0),
                 'scan_result': scan.get('scan_all_result_a', ''),
                 'file_info':   d.get('file_info', {}),
-                'permalink':   self._permalink(sha256),
+                'data_id':     data_id,
+                'permalink':   self._permalink(data_id),
             }
         return None
 
