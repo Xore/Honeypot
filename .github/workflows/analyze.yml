@@ -9,6 +9,8 @@
 #       c) Every scanner errored on every file (exit 2)
 #   - The "Commit reports" step runs even if scanning partially failed
 #     (uses: if: always() + check for report files)
+#   - Deleted files are NEVER scanned — git diff is filtered to
+#     added/modified files only (status A, C, M, R).
 
 name: Malware Analysis Pipeline
 
@@ -69,12 +71,24 @@ jobs:
                 | grep -v '\.gitkeep$' > /tmp/changed_files.txt || true
             fi
           else
-            git diff --name-only HEAD~1 HEAD \
+            # --diff-filter=ACMR  =>  Added, Copied, Modified, Renamed only
+            # Deleted (D) and any other status are excluded — never scan removed files
+            git diff --name-only --diff-filter=ACMR HEAD~1 HEAD \
               -- 'ELF/' 'Miori/' 'UNKWN/' 'samples/' \
               | grep -v '/$' \
               > /tmp/changed_files.txt || true
           fi
-          echo "=== Changed files ==="
+
+          # Remove any listed path that no longer exists on disk
+          # (safety net for renames / force-pushes)
+          if [ -f /tmp/changed_files.txt ]; then
+            while IFS= read -r line; do
+              [ -f "$line" ] && echo "$line"
+            done < /tmp/changed_files.txt > /tmp/existing_files.txt
+            mv /tmp/existing_files.txt /tmp/changed_files.txt
+          fi
+
+          echo "=== Files to scan ==="
           cat /tmp/changed_files.txt || true
           COUNT=$(wc -l < /tmp/changed_files.txt || echo 0)
           echo "count=$COUNT" >> "$GITHUB_OUTPUT"
