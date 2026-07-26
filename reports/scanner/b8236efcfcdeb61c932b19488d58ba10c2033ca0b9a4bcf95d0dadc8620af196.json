@@ -5,7 +5,7 @@
   "sha1": "4ba10e9acc18d2dd1d5acc72a681278c10145898",
   "md5": "e973b260c4613c14d285536e398f82cb",
   "size": 11124736,
-  "scanned_at": "2026-07-26T17:43:43Z",
+  "scanned_at": "2026-07-26T17:51:07Z",
   "results": {
     "VirusTotalScanner": {
       "source": "virustotal",
@@ -46,8 +46,12 @@
       "source": "hybrid_analysis",
       "known": false,
       "job_id": "6a66475223bd6f57da0ce900",
-      "sha256": "b8236efcfcdeb61c932b19488d58ba10c2033ca0b9a4bcf95d0dadc8620af196",
       "permalink": "https://www.hybrid-analysis.com/sample/b8236efcfcdeb61c932b19488d58ba10c2033ca0b9a4bcf95d0dadc8620af196",
+      "status": "completed",
+      "verdict": "suspicious",
+      "threat_score": 52,
+      "threat_level": null,
+      "av_detect": 0,
       "_ok": true
     },
     "MetaDefenderScanner": {
