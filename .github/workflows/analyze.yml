@@ -7,8 +7,13 @@
 #       a) No scanner API key secrets are set at all
 #       b) File list cannot be read
 #       c) Every scanner errored on every file (exit 2)
-#   - Deleted files are NEVER scanned (--diff-filter=ACMR)
-#   - Deletion-only pushes skip the entire job immediately.
+#   - Deleted files are NEVER scanned (--diff-filter=AR)
+#   - Deletion-only or structural-only pushes skip the entire job immediately.
+#   - Only genuinely new (Added) or renamed (Renamed) sample files are scanned.
+#     Modified files are intentionally excluded: a file that already exists in
+#     samples/ was already scanned on the commit that Added it. Re-scanning on
+#     every structural commit (scaffolding, .gitkeep, workflow changes) would
+#     cause redundant uploads — the root cause of the dashboard.exe re-scan.
 #
 # Sample layout:
 #   samples/ELF/       Linux/IoT ELF binaries
@@ -16,7 +21,7 @@
 #   samples/Scripts/   Dropper scripts
 #   samples/Docs/      Malicious documents
 #   samples/Miori/     Miori botnet samples
-#   samples/UNKWN/     Unclassified
+#   samples/UNKNOWN/   Unclassified
 
 name: Malware Analysis Pipeline
 
@@ -48,20 +53,22 @@ jobs:
           fetch-depth: 2
           token: ${{ secrets.GH_PAT }}
 
-      - name: Skip if deletion-only push
-        # Exit early (success) when the push contains no added/modified files.
-        # git diff-filter=ACMR = Added, Copied, Modified, Renamed (excludes Deleted).
-        # workflow_dispatch always continues regardless.
+      - name: Skip if no new sample files
+        # Exit early (success) when the push contains no Added or Renamed files
+        # under samples/. This prevents re-scanning pre-existing files when
+        # structural commits (scaffolding, .gitkeep, workflow edits) touch the
+        # samples/ path filter without actually adding new malware samples.
+        # --diff-filter=AR: A=Added, R=Renamed only (excludes Modified/Copied/Deleted)
         if: github.event_name != 'workflow_dispatch'
         run: |
           set -euo pipefail
-          ADDED=$(git diff --name-only --diff-filter=ACMR HEAD~1 HEAD \
-            -- 'samples/' | wc -l)
+          ADDED=$(git diff --name-only --diff-filter=AR HEAD~1 HEAD \
+            -- 'samples/' | grep -v '\.gitkeep$' | wc -l)
           if [ "$ADDED" -eq 0 ]; then
-            echo "Push contains only deletions — skipping pipeline."
+            echo "No new sample files in this push — skipping pipeline."
             exit 0
           fi
-          echo "$ADDED file(s) added/modified — continuing."
+          echo "$ADDED new sample file(s) detected — continuing."
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -92,7 +99,8 @@ jobs:
                 | grep -v '\.gitkeep$' > /tmp/changed_files.txt || true
             fi
           else
-            git diff --name-only --diff-filter=ACMR HEAD~1 HEAD \
+            # AR only: Added + Renamed — never re-scan pre-existing files
+            git diff --name-only --diff-filter=AR HEAD~1 HEAD \
               -- 'samples/' \
               | grep -v '/$' \
               | grep -v '\.gitkeep$' \
