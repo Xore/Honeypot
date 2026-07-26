@@ -95,6 +95,23 @@ def _err(source: str, msg: str, exc: Exception = None) -> dict:
     return result
 
 
+def _safe_json(r: requests.Response, source: str, context: str) -> dict | None:
+    """
+    Parse JSON from a response, returning None and logging an error if the
+    body is empty or not valid JSON. Prevents JSONDecodeError from propagating
+    as an unhandled exception when the API returns an empty / HTML body.
+    """
+    text = r.text.strip() if r.text else ''
+    if not text:
+        log.error(f'  [{source}] {context}: empty response body (HTTP {r.status_code})')
+        return None
+    try:
+        return r.json()
+    except Exception as e:
+        log.error(f'  [{source}] {context}: JSON parse error — {e} — body: {text[:120]}')
+        return None
+
+
 # ── Utility ───────────────────────────────────────────────────────────────────
 
 def hash_file(path: Path) -> dict:
@@ -311,10 +328,12 @@ class VirusTotalScanner(BaseScanner):
 
 # ── Scanner 2: MalwareBazaar ───────────────────────────────────────────────
 #
-# FIX (2026-07): abuse.ch now requires authentication on ALL endpoints.
-# The API key must be sent as the "Auth-Key" request HEADER.
-# Previously the key was only used in the upload POST body field "api_key"
-# and was never sent for lookups — causing 401 on both paths.
+# FIX (2026-07-a): abuse.ch requires Auth-Key header on ALL endpoints.
+# FIX (2026-07-b): _upload now uses _safe_json() to guard against empty /
+#   non-JSON response bodies that previously caused:
+#   "Expecting value: line 1 column 1 (char 0)"
+#   This happens when the API returns 200 with an empty body (duplicate
+#   submission, rate-limit soft-block, or maintenance mode).
 
 class MalwareBazaarScanner(BaseScanner):
     NAME = 'MalwareBazaar'
@@ -322,7 +341,6 @@ class MalwareBazaarScanner(BaseScanner):
 
     def __init__(self, key):
         self.key  = key
-        # Auth-Key header required on every request since mid-2025
         self.hdrs = {'Auth-Key': key}
 
     def _lookup(self, sha256):
@@ -336,7 +354,9 @@ class MalwareBazaarScanner(BaseScanner):
             return _err(self.NAME, '401 Unauthorized — check MALWAREBAZAAR_API_KEY secret')
         if r.status_code != 200:
             return _err(self.NAME, f'lookup HTTP {r.status_code}: {r.text[:120]}')
-        d = r.json()
+        d = _safe_json(r, self.NAME, 'lookup')
+        if d is None:
+            return _err(self.NAME, 'lookup returned empty/non-JSON body')
         if d.get('query_status') == 'ok':
             i = d['data'][0]
             return {
@@ -367,7 +387,21 @@ class MalwareBazaarScanner(BaseScanner):
             return _err(self.NAME, '401 Unauthorized on upload — check MALWAREBAZAAR_API_KEY secret')
         if r.status_code != 200:
             return _err(self.NAME, f'upload HTTP {r.status_code}: {r.text[:120]}')
-        d   = r.json()
+
+        # Guard: API occasionally returns 200 with empty body on duplicate
+        # submissions or soft rate-limits — do NOT call r.json() directly.
+        d = _safe_json(r, self.NAME, 'upload')
+        if d is None:
+            # Treat as a soft duplicate / already-known — not a hard failure.
+            log.warning(f'  MalwareBazaar: upload returned empty body for {path.name} '
+                        f'(likely duplicate or rate-limited); treating as submitted.')
+            return {
+                'source': 'malwarebazaar', 'known': False,
+                'submitted': True,
+                'note': 'empty response body — possible duplicate or rate-limit',
+                'permalink': f'https://bazaar.abuse.ch/browse/',
+            }
+
         sha = d.get('data', {}).get('sha256_hash', '')
         return {
             'source': 'malwarebazaar', 'known': False,
@@ -389,8 +423,14 @@ class MalwareBazaarScanner(BaseScanner):
 
 # ── Scanner 3: Hybrid-Analysis ───────────────────────────────────────────────
 #
-# FIX (2026-07): environment_id=120 (Windows 7 64-bit) was retired.
-# Default changed to 160 (Windows 10 64-bit).
+# FIX (2026-07-a): environment_id=120 (Windows 7 64-bit) was retired → 160.
+# FIX (2026-07-b): environment_id=160 is a paid enterprise environment and
+#   returns HTTP 404 on the public/free API tier.
+#   Valid free-tier environments:
+#     100 = Windows 7 32-bit
+#     110 = Windows 7 64-bit  ← default (broadest malware compatibility)
+#     200 = Android
+#     300 = Linux (Ubuntu 16.04, 64-bit)
 
 class HybridAnalysisScanner(BaseScanner):
     NAME = 'HybridAnalysis'
@@ -411,12 +451,12 @@ class HybridAnalysisScanner(BaseScanner):
             timeout=30,
         )
         if r.status_code == 404:
-            return None  # hash unknown → submit
+            return None
         if r.status_code != 200:
             return _err(self.NAME, f'lookup HTTP {r.status_code}: {r.text[:120]}')
         data = r.json()
         if not data:
-            return None  # empty list → unknown
+            return None
         t = data[0]
         return {
             'source': 'hybrid_analysis', 'known': True,
@@ -428,16 +468,18 @@ class HybridAnalysisScanner(BaseScanner):
             'permalink':    f'https://www.hybrid-analysis.com/sample/{sha256}',
         }
 
-    def _submit(self, path, env_id=160):
-        # env_id 160 = Windows 10 64-bit (120/Win7 was retired)
+    def _submit(self, path, env_id=110):
+        # env_id 110 = Windows 7 64-bit (free public API tier)
+        # 100=Win7-32, 110=Win7-64, 200=Android, 300=Linux
+        # 160 (Win10-64) requires a paid enterprise subscription → 404 on free tier
         with open(path, 'rb') as fh:
             r = requests.post(
                 f'{self.BASE}/submit/file',
                 headers=self.hdrs,
                 data={
-                    'environment_id':        env_id,
+                    'environment_id':         env_id,
                     'allow_community_access': True,
-                    'comment':               'honeypot-xore automated',
+                    'comment':                'honeypot-xore automated',
                 },
                 files={'file': (path.name, fh)},
                 timeout=120,
@@ -559,10 +601,11 @@ class JoeSandboxScanner(BaseScanner):
 
 # ── Scanner 6: MetaDefender (OPSWAT) ───────────────────────────────────────
 #
-# FIX (2026-07): Large file uploads (>~5 MB) fail with SSLEOFError on
-# GitHub Actions runners due to SSL session renegotiation mid-stream.
-# Fix: use a retry Session, set explicit Content-Type and Content-Length
-# so the server knows the payload size upfront, and raise timeout to 180s.
+# FIX (2026-07-a): SSLEOFError on large uploads → retry Session + explicit
+#   Content-Type / Content-Length headers + 180s timeout.
+# FIX (2026-07-b): Permalink URL corrected:
+#   WRONG: https://metadefender.opswat.com/results/file/{id}/regular/overview
+#   RIGHT: https://metadefender.com/results/file/{id}/overview
 
 class MetaDefenderScanner(BaseScanner):
     NAME = 'MetaDefender'
@@ -572,6 +615,10 @@ class MetaDefenderScanner(BaseScanner):
         self.hdrs    = {'apikey': key}
         self.session = _make_session(retries=3, backoff=3.0)
 
+    @staticmethod
+    def _permalink(data_id: str) -> str:
+        return f'https://metadefender.com/results/file/{data_id}/overview'
+
     def _lookup(self, sha256):
         r = self.session.get(
             f'{self.BASE}/hash/{sha256}',
@@ -579,7 +626,7 @@ class MetaDefenderScanner(BaseScanner):
             timeout=30,
         )
         if r.status_code == 404:
-            return None  # hash unknown → upload
+            return None
         if r.status_code != 200:
             return _err(self.NAME, f'lookup HTTP {r.status_code}: {r.text[:120]}')
         d    = r.json()
@@ -591,17 +638,17 @@ class MetaDefenderScanner(BaseScanner):
                 'total':       scan.get('total_avs', 0),
                 'scan_result': scan.get('scan_all_result_a', ''),
                 'file_info':   d.get('file_info', {}),
-                'permalink':   f'https://metadefender.opswat.com/results/file/{sha256}/regular/overview',
+                'permalink':   self._permalink(sha256),
             }
-        return None  # 200 but no results yet
+        return None
 
     def _upload(self, path):
         size = path.stat().st_size
         hdrs = {
             **self.hdrs,
-            'filename':      path.name,
-            'samplesharing': '1',
-            'Content-Type':  'application/octet-stream',
+            'filename':       path.name,
+            'samplesharing':  '1',
+            'Content-Type':   'application/octet-stream',
             'Content-Length': str(size),
         }
         try:
@@ -610,7 +657,7 @@ class MetaDefenderScanner(BaseScanner):
                     f'{self.BASE}/file',
                     headers=hdrs,
                     data=fh,
-                    timeout=180,  # large files need more time
+                    timeout=180,
                 )
         except Exception as e:
             return _err(self.NAME, f'upload connection error: {e}', e)
@@ -621,7 +668,7 @@ class MetaDefenderScanner(BaseScanner):
         return {
             'source': 'metadefender', 'known': False,
             'data_id':   data_id,
-            'permalink': f'https://metadefender.opswat.com/results/file/{data_id}/regular/overview',
+            'permalink': self._permalink(data_id),
         }
 
     def _poll(self, data_id, permalink):
