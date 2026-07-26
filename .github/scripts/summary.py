@@ -33,8 +33,15 @@ for f in report_files:
         mb = r.get('MalwareBazaarScanner', {})
 
         vt_s = f"{vt.get('positives','?')}/{vt.get('total','?')}" if vt.get('_ok') else '\u274c error'
-        md_s = str(md.get('positives', '-'))                       if md.get('_ok') else '\u274c error'
-        mb_s = mb.get('signature') or ('-' if mb.get('_ok') else '\u274c error')
+        md_s = str(md.get('positives', '0'))                       if md.get('_ok') else '\u274c error'
+
+        # MB: show signature if known, '0' if submitted/not found, error otherwise
+        if not mb.get('_ok'):
+            mb_s = '\u274c error'
+        elif mb.get('known') and mb.get('signature'):
+            mb_s = mb['signature']
+        else:
+            mb_s = '0'
 
         any_ok = any(v.get('_ok') for v in r.values())
         status = '\u2705 ok' if any_ok else '\u274c all failed'

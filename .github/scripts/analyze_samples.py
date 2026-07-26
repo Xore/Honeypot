@@ -88,7 +88,7 @@ def _make_session(retries: int = 3, backoff: float = 2.0) -> requests.Session:
 # ── Result helpers ───────────────────────────────────────────────────────────
 
 def _err(source: str, msg: str, exc: Exception = None) -> dict:
-    result = {'source': source, 'status': 'failed', 'error': msg}
+    result = {'source': source, 'status': 'failed', 'error': str(msg)}
     if exc:
         result['traceback'] = traceback.format_exc(limit=5)
     log.error(f'  [{source}] {msg}')
@@ -447,7 +447,7 @@ class MalwareBazaarScanner(BaseScanner):
 #   API v2 changelog — sending it causes HTTP 404 "Requested URI - Not Found".
 #   Removed from _submit() data payload.
 #
-# Current environment IDs per API v2.31.0 docs:
+# Current environment IDs per API v2 docs:
 #   100 = Windows 7 32-bit
 #   110 = Windows 7 32-bit (HWP Support)
 #   120 = Windows 7 64-bit  ← default
@@ -630,9 +630,7 @@ class JoeSandboxScanner(BaseScanner):
 #
 # FIX (2026-07-a): SSLEOFError on large uploads → retry Session + explicit
 #   Content-Type / Content-Length headers + 180s timeout.
-# FIX (2026-07-b): Permalink URL corrected:
-#   WRONG: https://metadefender.opswat.com/results/file/{id}/regular/overview
-#   RIGHT: https://metadefender.com/results/file/{id}/overview
+# FIX (2026-07-b): Permalink URL corrected.
 
 class MetaDefenderScanner(BaseScanner):
     NAME = 'MetaDefender'
@@ -999,7 +997,7 @@ def main():
         vt      = r['results'].get('VirusTotalScanner', {})
         md      = r['results'].get('MetaDefenderScanner', {})
         vt_str  = f"{vt.get('positives','?')}/{vt.get('total','?')}" if vt.get('_ok') else 'error'
-        md_str  = str(md.get('positives', '-')) if md.get('_ok') else 'error'
+        md_str  = str(md.get('positives', '0')) if md.get('_ok') else 'error'
         log.info(f'  {r["sha256"][:16]}… {r["filename"]:30s}  VT:{vt_str}  MD:{md_str}')
 
     if scanner_total > 0 and scanner_ok == 0:
