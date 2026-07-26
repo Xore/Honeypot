@@ -328,12 +328,11 @@ class VirusTotalScanner(BaseScanner):
 
 # ── Scanner 2: MalwareBazaar ───────────────────────────────────────────────
 #
-# FIX (2026-07-a): abuse.ch requires Auth-Key header on ALL endpoints.
-# FIX (2026-07-b): _upload now uses _safe_json() to guard against empty /
-#   non-JSON response bodies that previously caused:
-#   "Expecting value: line 1 column 1 (char 0)"
-#   This happens when the API returns 200 with an empty body (duplicate
-#   submission, rate-limit soft-block, or maintenance mode).
+# The MalwareBazaar upload API requires a multipart POST where metadata is
+# sent as a JSON string in a field named "json_data" (with content-type
+# application/json), NOT as separate form fields.
+# Auth-Key must be in the HTTP header on all requests.
+# Ref: https://bazaar.abuse.ch/api/#upload
 
 class MalwareBazaarScanner(BaseScanner):
     NAME = 'MalwareBazaar'
@@ -371,44 +370,66 @@ class MalwareBazaarScanner(BaseScanner):
         return None  # hash_not_found → proceed to upload
 
     def _upload(self, path):
+        # Pack all metadata into json_data as required by the API spec.
+        # Auth-Key goes in the header only — NOT in the form body.
+        json_data = {
+            'anonymous': 0,
+            'delivery_method': 'other',
+            'tags': ['honeypot', 'honeypot-xore'],
+        }
         with open(path, 'rb') as fh:
+            files = {
+                'json_data': (None, json.dumps(json_data), 'application/json'),
+                'file':      (path.name, fh, 'application/octet-stream'),
+            }
             r = requests.post(
                 self.BASE,
                 headers=self.hdrs,
-                data={
-                    'query':           'upload_sample',
-                    'delivery_method': 'other',
-                    'tags':            json.dumps(['honeypot', 'honeypot-xore']),
-                },
-                files={'file': (path.name, fh)},
+                files=files,
                 timeout=120,
             )
+
+        log.info(f'  MalwareBazaar: upload HTTP {r.status_code}')
+
         if r.status_code == 401:
             return _err(self.NAME, '401 Unauthorized on upload — check MALWAREBAZAAR_API_KEY secret')
         if r.status_code != 200:
             return _err(self.NAME, f'upload HTTP {r.status_code}: {r.text[:120]}')
 
-        # Guard: API occasionally returns 200 with empty body on duplicate
-        # submissions or soft rate-limits — do NOT call r.json() directly.
         d = _safe_json(r, self.NAME, 'upload')
         if d is None:
-            # Treat as a soft duplicate / already-known — not a hard failure.
             log.warning(f'  MalwareBazaar: upload returned empty body for {path.name} '
                         f'(likely duplicate or rate-limited); treating as submitted.')
             return {
                 'source': 'malwarebazaar', 'known': False,
                 'submitted': True,
                 'note': 'empty response body — possible duplicate or rate-limit',
-                'permalink': f'https://bazaar.abuse.ch/browse/',
+                'permalink': 'https://bazaar.abuse.ch/browse/',
             }
 
-        sha = d.get('data', {}).get('sha256_hash', '')
-        return {
-            'source': 'malwarebazaar', 'known': False,
-            'submitted': d.get('query_status') == 'sample_submitted',
-            'sha256': sha,
-            'permalink': f'https://bazaar.abuse.ch/sample/{sha}/',
-        }
+        status = d.get('query_status', '')
+        log.info(f'  MalwareBazaar: query_status={status}')
+
+        if status == 'inserted':
+            sha = d.get('data', {}).get('sha256_hash', '')
+            log.info(f'  MalwareBazaar: inserted → {sha}')
+            return {
+                'source': 'malwarebazaar', 'known': False,
+                'submitted': True,
+                'sha256': sha,
+                'permalink': f'https://bazaar.abuse.ch/sample/{sha}/',
+            }
+        if status == 'file_already_known':
+            sha = d.get('data', {}).get('sha256_hash', path.name)
+            log.info(f'  MalwareBazaar: file already known')
+            return {
+                'source': 'malwarebazaar', 'known': True,
+                'submitted': False,
+                'note': 'file_already_known',
+                'permalink': f'https://bazaar.abuse.ch/browse/',
+            }
+        # Any other status (no_api_key, user_blacklisted, file_expected, etc.)
+        return _err(self.NAME, f'upload query_status={status}: {json.dumps(d)[:200]}')
 
     def _scan(self, path, hashes, **_):
         result = self._lookup(hashes['sha256'])
@@ -482,8 +503,7 @@ class HybridAnalysisScanner(BaseScanner):
                     'comment':                'honeypot-xore automated',
                 },
                 files={'file': (path.name, fh)},
-                timeout=120,
-            )
+                timeout=120)
         if r.status_code not in (200, 201):
             return _err(self.NAME, f'submit HTTP {r.status_code}: {r.text[:120]}')
         d = r.json()
