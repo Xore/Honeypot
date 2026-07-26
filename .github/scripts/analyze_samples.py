@@ -37,6 +37,8 @@ import traceback
 from pathlib import Path
 
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 logging.basicConfig(
     level=logging.INFO,
@@ -57,12 +59,30 @@ SCANNABLE_MAGIC = [
     b'\xfe\xed\xfa\xcf',
     b'PK\x03\x04',
     b'%PDF',
-    b'{\\rtf',
+    b'{\rtf',
     b'\xd0\xcf\x11\xe0',
     b'#!/',
 ]
 
 MAX_UPLOAD_SIZE = 32 * 1024 * 1024  # 32 MB
+
+
+# ── Retry session helper ─────────────────────────────────────────────────────
+
+def _make_session(retries: int = 3, backoff: float = 2.0) -> requests.Session:
+    """Return a Session with automatic retry on connection/SSL errors."""
+    session = requests.Session()
+    retry = Retry(
+        total=retries,
+        backoff_factor=backoff,
+        status_forcelist=[500, 502, 503, 504],
+        allowed_methods=["GET", "POST"],
+        raise_on_status=False,
+    )
+    adapter = HTTPAdapter(max_retries=retry)
+    session.mount("https://", adapter)
+    session.mount("http://",  adapter)
+    return session
 
 
 # ── Result helpers ───────────────────────────────────────────────────────────
@@ -221,7 +241,7 @@ class VirusTotalScanner(BaseScanner):
                 'permalink':  f'https://www.virustotal.com/gui/file/{sha256}',
             }
         if r.status_code == 404:
-            return None  # unknown — must upload
+            return None
         return _err(self.NAME, f'lookup HTTP {r.status_code}: {r.text[:120]}')
 
     def _upload(self, path):
@@ -290,19 +310,32 @@ class VirusTotalScanner(BaseScanner):
 
 
 # ── Scanner 2: MalwareBazaar ───────────────────────────────────────────────
+#
+# FIX (2026-07): abuse.ch now requires authentication on ALL endpoints.
+# The API key must be sent as the "Auth-Key" request HEADER.
+# Previously the key was only used in the upload POST body field "api_key"
+# and was never sent for lookups — causing 401 on both paths.
 
 class MalwareBazaarScanner(BaseScanner):
     NAME = 'MalwareBazaar'
     BASE = 'https://mb-api.abuse.ch/api/v1/'
 
     def __init__(self, key):
-        self.key = key
+        self.key  = key
+        # Auth-Key header required on every request since mid-2025
+        self.hdrs = {'Auth-Key': key}
 
     def _lookup(self, sha256):
-        r = requests.post(self.BASE,
-                          data={'query': 'get_info', 'hash': sha256},
-                          timeout=30)
-        r.raise_for_status()
+        r = requests.post(
+            self.BASE,
+            headers=self.hdrs,
+            data={'query': 'get_info', 'hash': sha256},
+            timeout=30,
+        )
+        if r.status_code == 401:
+            return _err(self.NAME, '401 Unauthorized — check MALWAREBAZAAR_API_KEY secret')
+        if r.status_code != 200:
+            return _err(self.NAME, f'lookup HTTP {r.status_code}: {r.text[:120]}')
         d = r.json()
         if d.get('query_status') == 'ok':
             i = d['data'][0]
@@ -315,17 +348,25 @@ class MalwareBazaarScanner(BaseScanner):
                 'reporter':   i.get('reporter'),
                 'permalink':  f'https://bazaar.abuse.ch/sample/{sha256}/',
             }
-        return None
+        return None  # hash_not_found → proceed to upload
 
     def _upload(self, path):
         with open(path, 'rb') as fh:
             r = requests.post(
                 self.BASE,
-                data={'query': 'upload_sample', 'delivery_method': 'other',
-                      'tags': json.dumps(['honeypot', 'honeypot-xore']),
-                      'api_key': self.key},
-                files={'file': (path.name, fh)}, timeout=120)
-        r.raise_for_status()
+                headers=self.hdrs,
+                data={
+                    'query':           'upload_sample',
+                    'delivery_method': 'other',
+                    'tags':            json.dumps(['honeypot', 'honeypot-xore']),
+                },
+                files={'file': (path.name, fh)},
+                timeout=120,
+            )
+        if r.status_code == 401:
+            return _err(self.NAME, '401 Unauthorized on upload — check MALWAREBAZAAR_API_KEY secret')
+        if r.status_code != 200:
+            return _err(self.NAME, f'upload HTTP {r.status_code}: {r.text[:120]}')
         d   = r.json()
         sha = d.get('data', {}).get('sha256_hash', '')
         return {
@@ -337,6 +378,8 @@ class MalwareBazaarScanner(BaseScanner):
 
     def _scan(self, path, hashes, **_):
         result = self._lookup(hashes['sha256'])
+        if result and result.get('status') == 'failed':
+            return result
         if result:
             log.info(f'  MalwareBazaar: known → {result.get("signature")}')
             return result
@@ -345,23 +388,19 @@ class MalwareBazaarScanner(BaseScanner):
 
 
 # ── Scanner 3: Hybrid-Analysis ───────────────────────────────────────────────
+#
+# FIX (2026-07): environment_id=120 (Windows 7 64-bit) was retired.
+# Default changed to 160 (Windows 10 64-bit).
 
 class HybridAnalysisScanner(BaseScanner):
-    """
-    FIX: _lookup previously called r.raise_for_status() which raised an
-    exception on 404 (hash not known yet). The BaseScanner wrapper caught
-    that and marked the entire scanner as failed — the submit path was
-    never reached. Now 404 is explicitly handled as "hash unknown" → None,
-    which triggers _submit().
-    """
     NAME = 'HybridAnalysis'
     BASE = 'https://www.hybrid-analysis.com/api/v2'
 
     def __init__(self, key):
         self.hdrs = {
-            'api-key': key,
+            'api-key':    key,
             'User-Agent': 'Falcon Sandbox',
-            'accept': 'application/json',
+            'accept':     'application/json',
         }
 
     def _lookup(self, sha256):
@@ -371,15 +410,13 @@ class HybridAnalysisScanner(BaseScanner):
             headers=self.hdrs,
             timeout=30,
         )
-        # 404 = hash not in HA database yet — not an error, upload needed
         if r.status_code == 404:
-            return None
-        # Any other non-200 is a real error
+            return None  # hash unknown → submit
         if r.status_code != 200:
             return _err(self.NAME, f'lookup HTTP {r.status_code}: {r.text[:120]}')
         data = r.json()
         if not data:
-            return None  # empty list = unknown
+            return None  # empty list → unknown
         t = data[0]
         return {
             'source': 'hybrid_analysis', 'known': True,
@@ -391,15 +428,20 @@ class HybridAnalysisScanner(BaseScanner):
             'permalink':    f'https://www.hybrid-analysis.com/sample/{sha256}',
         }
 
-    def _submit(self, path, env_id=120):
+    def _submit(self, path, env_id=160):
+        # env_id 160 = Windows 10 64-bit (120/Win7 was retired)
         with open(path, 'rb') as fh:
             r = requests.post(
                 f'{self.BASE}/submit/file',
                 headers=self.hdrs,
-                data={'environment_id': env_id,
-                      'allow_community_access': True,
-                      'comment': 'honeypot-xore automated'},
-                files={'file': (path.name, fh)}, timeout=120)
+                data={
+                    'environment_id':        env_id,
+                    'allow_community_access': True,
+                    'comment':               'honeypot-xore automated',
+                },
+                files={'file': (path.name, fh)},
+                timeout=120,
+            )
         if r.status_code not in (200, 201):
             return _err(self.NAME, f'submit HTTP {r.status_code}: {r.text[:120]}')
         d = r.json()
@@ -516,31 +558,28 @@ class JoeSandboxScanner(BaseScanner):
 
 
 # ── Scanner 6: MetaDefender (OPSWAT) ───────────────────────────────────────
+#
+# FIX (2026-07): Large file uploads (>~5 MB) fail with SSLEOFError on
+# GitHub Actions runners due to SSL session renegotiation mid-stream.
+# Fix: use a retry Session, set explicit Content-Type and Content-Length
+# so the server knows the payload size upfront, and raise timeout to 180s.
 
 class MetaDefenderScanner(BaseScanner):
-    """
-    FIX: _lookup previously called r.raise_for_status() which raised an
-    exception on 404 (hash not in MetaDefender DB). Now 404 is handled
-    explicitly as "hash unknown" → None, triggering _upload().
-    Also fixed: non-200 responses (401, 429, 5xx) return _err() dict
-    instead of raising, keeping the failure-contract intact.
-    """
     NAME = 'MetaDefender'
     BASE = 'https://api.metadefender.com/v4'
 
     def __init__(self, key):
-        self.hdrs = {'apikey': key}
+        self.hdrs    = {'apikey': key}
+        self.session = _make_session(retries=3, backoff=3.0)
 
     def _lookup(self, sha256):
-        r = requests.get(
+        r = self.session.get(
             f'{self.BASE}/hash/{sha256}',
             headers=self.hdrs,
             timeout=30,
         )
-        # 404 = hash not in MetaDefender yet — not an error, upload needed
         if r.status_code == 404:
-            return None
-        # 401 = invalid API key, 429 = quota exceeded, etc.
+            return None  # hash unknown → upload
         if r.status_code != 200:
             return _err(self.NAME, f'lookup HTTP {r.status_code}: {r.text[:120]}')
         d    = r.json()
@@ -554,14 +593,27 @@ class MetaDefenderScanner(BaseScanner):
                 'file_info':   d.get('file_info', {}),
                 'permalink':   f'https://metadefender.opswat.com/results/file/{sha256}/regular/overview',
             }
-        # 200 but no scan_results yet (queued) — treat as unknown
-        return None
+        return None  # 200 but no results yet
 
     def _upload(self, path):
-        hdrs = {**self.hdrs, 'filename': path.name, 'samplesharing': '1'}
-        with open(path, 'rb') as fh:
-            r = requests.post(f'{self.BASE}/file',
-                              headers=hdrs, data=fh, timeout=120)
+        size = path.stat().st_size
+        hdrs = {
+            **self.hdrs,
+            'filename':      path.name,
+            'samplesharing': '1',
+            'Content-Type':  'application/octet-stream',
+            'Content-Length': str(size),
+        }
+        try:
+            with open(path, 'rb') as fh:
+                r = self.session.post(
+                    f'{self.BASE}/file',
+                    headers=hdrs,
+                    data=fh,
+                    timeout=180,  # large files need more time
+                )
+        except Exception as e:
+            return _err(self.NAME, f'upload connection error: {e}', e)
         if r.status_code != 200:
             return _err(self.NAME, f'upload HTTP {r.status_code}: {r.text[:120]}')
         data_id = r.json().get('data_id')
@@ -577,8 +629,8 @@ class MetaDefenderScanner(BaseScanner):
                 'data_id': data_id, 'permalink': permalink}
         for attempt in range(20):
             time.sleep(15)
-            r = requests.get(f'{self.BASE}/file/{data_id}',
-                             headers=self.hdrs, timeout=30)
+            r = self.session.get(f'{self.BASE}/file/{data_id}',
+                                 headers=self.hdrs, timeout=30)
             if r.status_code != 200:
                 return {**base, 'status': 'poll_error',
                         'error': f'poll HTTP {r.status_code}'}
