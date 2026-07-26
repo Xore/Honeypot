@@ -4,7 +4,7 @@
 
 This repository stores malware samples, analysis reports, IOCs, and YARA rules captured by the [honeypot-stack](https://github.com/Xore/honeypot-stack). Every new sample pushed to `samples/` automatically triggers a full multi-scanner analysis pipeline via GitHub Actions.
 
-> ⚠️ **WARNING**: This repository contains **real malware samples**. All binaries are stored in password-protected ZIP archives (password: `infected`). Never execute them outside of an isolated sandbox.
+> ⚠️ **WARNING**: This repository contains **real malware samples**. Never execute them outside of an isolated sandbox.
 
 ---
 
