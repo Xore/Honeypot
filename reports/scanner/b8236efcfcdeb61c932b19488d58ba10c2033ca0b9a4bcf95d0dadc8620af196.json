@@ -5,7 +5,7 @@
   "sha1": "4ba10e9acc18d2dd1d5acc72a681278c10145898",
   "md5": "e973b260c4613c14d285536e398f82cb",
   "size": 11124736,
-  "scanned_at": "2026-07-26T15:58:00Z",
+  "scanned_at": "2026-07-26T16:08:47Z",
   "results": {
     "VirusTotalScanner": {
       "source": "virustotal",
@@ -33,16 +33,20 @@
     },
     "MalwareBazaarScanner": {
       "source": "malwarebazaar",
-      "known": false,
-      "submitted": false,
-      "sha256": "",
-      "permalink": "https://bazaar.abuse.ch/sample//",
+      "known": true,
+      "signature": null,
+      "file_type": "exe",
+      "tags": null,
+      "first_seen": "2026-07-26 15:58:04",
+      "reporter": "Xoreyo",
+      "permalink": "https://bazaar.abuse.ch/sample/b8236efcfcdeb61c932b19488d58ba10c2033ca0b9a4bcf95d0dadc8620af196/",
       "_ok": true
     },
     "HybridAnalysisScanner": {
       "source": "HybridAnalysis",
       "status": "failed",
-      "error": "submit HTTP 404: {\"message\":\"Requested URI - Not Found\"}",
+      "error": "0",
+      "traceback": "Traceback (most recent call last):\n  File \"/home/runner/work/Honeypot/Honeypot/.github/scripts/analyze_samples.py\", line 219, in scan\n    return self._scan(path, hashes, wait=wait)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/runner/work/Honeypot/Honeypot/.github/scripts/analyze_samples.py\", line 524, in _scan\n    result = self._lookup(hashes['sha256'])\n             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/runner/work/Honeypot/Honeypot/.github/scripts/analyze_samples.py\", line 485, in _lookup\n    t = data[0]\n        ~~~~^^^\nKeyError: 0\n",
       "_ok": false
     },
     "MetaDefenderScanner": {
