@@ -8,6 +8,7 @@
 #       b) File list cannot be read
 #       c) Every scanner errored on every file (exit 2)
 #   - Deleted files are NEVER scanned (--diff-filter=ACMR)
+#   - Deletion-only pushes skip the entire job immediately.
 
 name: Malware Analysis Pipeline
 
@@ -41,6 +42,21 @@ jobs:
         with:
           fetch-depth: 2
           token: ${{ secrets.GH_PAT }}
+
+      - name: Skip if deletion-only push
+        # Exit early (success) when the push contains no added/modified files.
+        # git diff-filter=ACMR = Added, Copied, Modified, Renamed (excludes Deleted).
+        # workflow_dispatch always continues regardless.
+        if: github.event_name != 'workflow_dispatch'
+        run: |
+          set -euo pipefail
+          ADDED=$(git diff --name-only --diff-filter=ACMR HEAD~1 HEAD \
+            -- 'ELF/' 'Miori/' 'UNKWN/' 'samples/' | wc -l)
+          if [ "$ADDED" -eq 0 ]; then
+            echo "Push contains only deletions — skipping pipeline."
+            exit 0
+          fi
+          echo "$ADDED file(s) added/modified — continuing."
 
       - name: Set up Python
         uses: actions/setup-python@v5
