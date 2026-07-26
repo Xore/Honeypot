@@ -16,6 +16,8 @@
 #     cause redundant uploads — the root cause of the dashboard.exe re-scan.
 #   - PRs trigger analysis but never commit results (dry-run mode).
 #   - Scheduled runs rescan all of samples/ with fresh API scores.
+#   - generate_yara.py runs after each scan and auto-generates YARA rules
+#     from scan results into yara-rules/auto/. Failures are non-fatal.
 #
 # Sample layout:
 #   samples/ELF/       Linux/IoT ELF binaries
@@ -76,12 +78,6 @@ jobs:
           token: ${{ secrets.GH_PAT }}
 
       - name: Skip if no new sample files
-        # Exit early (success) when the push contains no Added or Renamed files
-        # under samples/. This prevents re-scanning pre-existing files when
-        # structural commits (scaffolding, .gitkeep, workflow edits) touch the
-        # samples/ path filter without actually adding new malware samples.
-        # --diff-filter=AR: A=Added, R=Renamed only (excludes Modified/Copied/Deleted)
-        # Fallback: on force-push or first commit, diff HEAD~1 may fail — list all samples.
         if: github.event_name != 'workflow_dispatch' && github.event_name != 'schedule'
         run: |
           set -euo pipefail
@@ -125,7 +121,7 @@ jobs:
           sudo apt-get install -qq -y \
             p7zip-full libmagic1 \
             libpango-1.0-0 libpangoft2-1.0-0 libharfbuzz0b \
-            fonts-dejavu-core yara
+            fonts-dejavu-core yara binutils
 
       - name: Detect changed sample files
         id: find_samples
@@ -140,11 +136,8 @@ jobs:
                 | grep -v '\.gitkeep$' > /tmp/changed_files.txt || true
             fi
           elif [ "${{ github.event_name }}" = "schedule" ]; then
-            # Full rescan on scheduled runs
             find samples/ -type f | grep -v '\.gitkeep$' > /tmp/changed_files.txt || true
           else
-            # AR only: Added + Renamed — never re-scan pre-existing files
-            # Fallback to full list if HEAD~1 doesn't exist (force-push / first commit)
             git diff --name-only --diff-filter=AR HEAD~1 HEAD \
               -- 'samples/' \
               | grep -v '/$' \
@@ -166,15 +159,15 @@ jobs:
           echo "count=$COUNT" >> "$GITHUB_OUTPUT"
 
       - name: YARA local pre-scan
-        # Offline detection using local YARA rules before consuming API quota.
-        # Rules live in yara-rules/. Missing rules dir is a soft skip, not a failure.
         id: yara
         if: steps.find_samples.outputs.count != '0'
         run: |
           set -euo pipefail
           YARA_HITS=0
-          if [ ! -d "yara-rules" ] || [ -z "$(ls yara-rules/*.yar yara-rules/*.yara 2>/dev/null)" ]; then
-            echo "No YARA rules found in yara-rules/ — skipping local scan."
+          # Scan both hand-crafted and auto-generated rules
+          RULE_FILES=$(find yara-rules/ -name '*.yar' -o -name '*.yara' 2>/dev/null | grep -v '_invalid' | wc -l)
+          if [ "$RULE_FILES" -eq 0 ]; then
+            echo "No YARA rules found — skipping local scan."
             echo "yara_hits=0" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -182,7 +175,11 @@ jobs:
           REPORT="reports/yara/yara-$(date +%Y-%m-%d-%H%M%S).txt"
           while IFS= read -r sample; do
             [ -f "$sample" ] || continue
-            yara --recursive yara-rules/ "$sample" 2>/dev/null >> "$REPORT" || true
+            find yara-rules/ -name '*.yar' -o -name '*.yara' 2>/dev/null \
+              | grep -v '_invalid' \
+              | while read -r rulefile; do
+                  yara "$rulefile" "$sample" 2>/dev/null >> "$REPORT" || true
+                done
           done < /tmp/changed_files.txt
           YARA_HITS=$(grep -c '.' "$REPORT" 2>/dev/null || echo 0)
           echo "YARA hits: $YARA_HITS"
@@ -224,8 +221,27 @@ jobs:
           fi
           exit 0
 
+      - name: Generate YARA rules from scan results
+        # Runs after scanner; failures are non-fatal (|| true).
+        # Reads reports/scanner/*.json, extracts strings from sample binaries,
+        # emits rules to yara-rules/auto/<family>.yar.
+        # New rules are then automatically picked up by the next YARA pre-scan.
+        id: yara_gen
+        if: steps.find_samples.outputs.count != '0'
+        run: |
+          set -uo pipefail
+          OUTPUT=$(python3 .github/scripts/generate_yara.py \
+            --report-dir reports/scanner/ \
+            --sample-dir samples/ \
+            --output-dir yara-rules/auto/ 2>&1) || true
+          echo "$OUTPUT"
+          NEW=$(echo "$OUTPUT"   | grep '^new_rules='     | cut -d= -f2 || echo 0)
+          UPD=$(echo "$OUTPUT"   | grep '^updated_rules=' | cut -d= -f2 || echo 0)
+          echo "yara_new=$NEW"     >> "$GITHUB_OUTPUT"
+          echo "yara_updated=$UPD" >> "$GITHUB_OUTPUT"
+          echo "::notice::YARA rule generation: $NEW new, $UPD updated"
+
       - name: Update IOC changelog
-        # Append a dated entry to iocs/CHANGELOG.md with counts of new IOCs.
         if: steps.find_samples.outputs.count != '0'
         run: |
           set -euo pipefail
@@ -234,8 +250,11 @@ jobs:
           [ -f "$CHANGELOG" ] || echo "# IOC Changelog" > "$CHANGELOG"
           DATE=$(date +%Y-%m-%d)
           NEW_IOCS=$(find iocs/ -name '*.txt' -newer "$CHANGELOG" 2>/dev/null | wc -l || echo 0)
-          printf "\n## %s\n- New IOC files: %s\n- Triggered by: %s (%s)\n" \
-            "$DATE" "$NEW_IOCS" "${{ github.event_name }}" "${{ github.sha }}" \
+          printf "\n## %s\n- New IOC files: %s\n- YARA rules generated: %s new, %s updated\n- Triggered by: %s (%s)\n" \
+            "$DATE" "$NEW_IOCS" \
+            "${{ steps.yara_gen.outputs.yara_new }}" \
+            "${{ steps.yara_gen.outputs.yara_updated }}" \
+            "${{ github.event_name }}" "${{ github.sha }}" \
             >> "$CHANGELOG"
 
       - name: Generate PDF report
@@ -263,22 +282,24 @@ jobs:
           retention-days: 90
           if-no-files-found: warn
 
-      - name: Commit reports and IOC updates
-        # Skip commit on PRs (dry-run mode) and schedule triggers commit normally
+      - name: Commit reports, IOC updates and YARA rules
+        # Skip commit on PRs (dry-run mode)
+        # Commits: reports/ + iocs/ + yara-rules/auto/
         if: always() && steps.find_samples.outputs.count != '0' && github.event_name != 'pull_request'
         run: |
           git config user.name  "honeypot-bot"
           git config user.email "honeypot-bot@noreply.github.com"
-          git add reports/ iocs/ 2>/dev/null || true
+          git add reports/ iocs/ yara-rules/auto/ 2>/dev/null || true
           if git diff --cached --quiet; then
             echo "Nothing new to commit."
           else
-            git commit -m "bot: scanner results $(date +%Y-%m-%d) [skip ci]"
+            YARA_NEW="${{ steps.yara_gen.outputs.yara_new }}"
+            YARA_UPD="${{ steps.yara_gen.outputs.yara_updated }}"
+            git commit -m "bot: scanner results $(date +%Y-%m-%d) | yara +${YARA_NEW} ~${YARA_UPD} [skip ci]"
             git push
           fi
 
       - name: Job summary
-        # Always emit a summary — even when no samples were found
         if: always()
         run: |
           if [ "${{ steps.find_samples.outputs.count }}" = "0" ] || [ -z "${{ steps.find_samples.outputs.count }}" ]; then
@@ -291,4 +312,9 @@ jobs:
             echo "" >> "$GITHUB_STEP_SUMMARY"
             echo "### YARA Pre-Scan" >> "$GITHUB_STEP_SUMMARY"
             echo "- Local rule hits: \`${{ steps.yara.outputs.yara_hits }}\`" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "### Auto-Generated YARA Rules" >> "$GITHUB_STEP_SUMMARY"
+            echo "- New rules:     \`${{ steps.yara_gen.outputs.yara_new }}\`" >> "$GITHUB_STEP_SUMMARY"
+            echo "- Updated rules: \`${{ steps.yara_gen.outputs.yara_updated }}\`" >> "$GITHUB_STEP_SUMMARY"
+            echo "- Location: \`yara-rules/auto/\`" >> "$GITHUB_STEP_SUMMARY"
           fi
