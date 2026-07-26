@@ -5,18 +5,18 @@
   "sha1": "4ba10e9acc18d2dd1d5acc72a681278c10145898",
   "md5": "e973b260c4613c14d285536e398f82cb",
   "size": 11124736,
-  "scanned_at": "2026-07-26T16:22:34Z",
+  "scanned_at": "2026-07-26T17:43:43Z",
   "results": {
     "VirusTotalScanner": {
       "source": "virustotal",
       "known": true,
-      "positives": 2,
+      "positives": 4,
       "suspicious": 0,
       "total": 74,
       "stats": {
-        "malicious": 2,
+        "malicious": 4,
         "suspicious": 0,
-        "undetected": 67,
+        "undetected": 65,
         "harmless": 0,
         "timeout": 0,
         "confirmed-timeout": 0,
@@ -43,10 +43,12 @@
       "_ok": true
     },
     "HybridAnalysisScanner": {
-      "source": "HybridAnalysis",
-      "status": "failed",
-      "error": "submit HTTP 404: {\"message\":\"Requested URI - Not Found\"}",
-      "_ok": false
+      "source": "hybrid_analysis",
+      "known": false,
+      "job_id": "6a66475223bd6f57da0ce900",
+      "sha256": "b8236efcfcdeb61c932b19488d58ba10c2033ca0b9a4bcf95d0dadc8620af196",
+      "permalink": "https://www.hybrid-analysis.com/sample/b8236efcfcdeb61c932b19488d58ba10c2033ca0b9a4bcf95d0dadc8620af196",
+      "_ok": true
     },
     "MetaDefenderScanner": {
       "source": "metadefender",
