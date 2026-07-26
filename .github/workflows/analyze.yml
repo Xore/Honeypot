@@ -106,6 +106,16 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-pip-
 
+      - name: Fix apt archives ownership
+        # A previous run's `apt-get install` (via sudo) leaves cached .debs
+        # root:root. actions/cache's restore step extracts as the unprivileged
+        # runner user, so overwriting those files fails with "Permission
+        # denied" and the whole restore aborts (cache silently treated as a
+        # miss). Reset ownership before restore runs so extraction succeeds.
+        run: |
+          sudo mkdir -p /var/cache/apt/archives
+          sudo chown -R "$(id -u):$(id -g)" /var/cache/apt/archives
+
       - name: Cache apt packages
         # Cache only the downloaded .deb files, not the lock/partial dirs
         # which are owned by root and cannot be archived by the runner user.
@@ -280,7 +290,9 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: scan-report-${{ github.run_id }}
-          path: reports/pdf/scan-report-*.pdf
+          path: |
+            reports/pdf/scan-report-*.pdf
+            reports/pdf/samples/*.pdf
           retention-days: 90
           if-no-files-found: warn
 

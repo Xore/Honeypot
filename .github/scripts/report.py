@@ -2,8 +2,10 @@
 """
 report.py — Xore/Honeypot PDF report generator
 
-Reads all JSON reports from reports/scanner/ and produces a single
-human-readable PDF at reports/scan-report-<date>.pdf using Jinja2 + WeasyPrint.
+Reads all JSON reports from reports/scanner/ and produces:
+  - one combined PDF at reports/pdf/scan-report-<date>.pdf
+  - one per-sample PDF (payload name + date) under reports/pdf/samples/
+using Jinja2 + WeasyPrint.
 
 Usage:
   python3 report.py --input-dir reports/scanner/ \
@@ -17,6 +19,7 @@ Dependencies (installed by the workflow):
 import argparse
 import json
 import os
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -216,12 +219,131 @@ TEMPLATE = """
 """
 
 
+# ── Per-sample HTML template ────────────────────────────────────────────────
+#
+# One PDF per scanned payload — covers page shows payload name + scan date up
+# front, per the report-per-sample requirement, then the same hash/scanner
+# detail sections as the combined report's per-sample section.
+
+SAMPLE_TEMPLATE = """
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<style>
+  @page {
+    size: A4;
+    margin: 20mm 18mm 20mm 18mm;
+    @bottom-right { content: "Page " counter(page) " of " counter(pages); font-size: 8pt; color: #888; }
+  }
+  * { box-sizing: border-box; }
+  body  { font-family: 'DejaVu Sans', Arial, sans-serif; font-size: 10pt; color: #222; }
+  h1    { font-size: 18pt; color: #1a1a2e; margin-bottom: 2mm; }
+  h2    { font-size: 13pt; color: #16213e; border-bottom: 1px solid #ccc;
+          padding-bottom: 1mm; margin-top: 8mm; page-break-after: avoid; }
+  h3    { font-size: 10pt; color: #0f3460; margin-top: 5mm; page-break-after: avoid; }
+  .cover { border: 1px solid #ddd; border-radius: 4px; padding: 6mm; margin-bottom: 6mm; }
+  .cover .name { font-size: 14pt; font-weight: bold; color: #1a1a2e; }
+  .cover .date { font-size: 10pt; color: #555; margin-top: 2mm; }
+  table  { width: 100%; border-collapse: collapse; margin-top: 3mm; font-size: 8.5pt; }
+  th     { background: #1a1a2e; color: #fff; text-align: left;
+           padding: 3px 6px; font-size: 8pt; }
+  td     { padding: 3px 6px; border-bottom: 1px solid #eee; vertical-align: top; }
+  tr:nth-child(even) td { background: #f9f9f9; }
+  .mono  { font-family: 'DejaVu Sans Mono', monospace; font-size: 7.5pt; }
+  .hash  { word-break: break-all; }
+  .section-box { border: 1px solid #ddd; border-radius: 4px;
+                 padding: 4mm; margin-top: 4mm; page-break-inside: avoid; }
+  .error-box   { border: 1px solid #fd7e14; background: #fff8f0;
+                 border-radius: 4px; padding: 3mm; font-size: 8pt; color: #8a4000; }
+  .permalink { font-size: 7pt; color: #0f3460; word-break: break-all; }
+</style>
+</head>
+<body>
+
+<h1>&#x1F50E; Payload Scan Report</h1>
+<div class="cover">
+  <div class="name">{{ r.filename }}</div>
+  <div class="date">Scanned: {{ r.scanned_at }}</div>
+  <div class="date">Report generated: {{ generated_at }}</div>
+</div>
+
+<div class="section-box">
+  <h3>Hashes</h3>
+  <table>
+    <tr><th>Algorithm</th><th>Value</th></tr>
+    <tr><td>SHA256</td><td class="mono hash">{{ r.sha256 }}</td></tr>
+    <tr><td>SHA1</td>  <td class="mono hash">{{ r.sha1 }}</td></tr>
+    <tr><td>MD5</td>   <td class="mono hash">{{ r.md5 }}</td></tr>
+    <tr><td>Size</td>  <td>{{ "{:,}".format(r.size) }} bytes</td></tr>
+  </table>
+</div>
+
+{% for scanner_name, result in r.results.items() %}
+<div class="section-box">
+  <h3>{{ scanner_name | replace('Scanner','') }}</h3>
+  {% if result.get('status') == 'failed' or result.get('error') %}
+    <div class="error-box">
+      <strong>Error:</strong> {{ result.get('error', 'unknown error') }}
+    </div>
+  {% else %}
+    <table>
+      {% for k, v in result.items() %}
+      {% if k not in ('source', '_ok', 'traceback', 'stats', 'file_info') %}
+      <tr>
+        <td style="width:30%; font-weight:bold">{{ k }}</td>
+        <td>
+          {% if k == 'permalink' and v %}
+            <a class="permalink" href="{{ v }}">{{ v }}</a>
+          {% elif v is mapping %}
+            <span class="mono">{{ v | tojson }}</span>
+          {% elif v is iterable and v is not string %}
+            {{ v | join(', ') }}
+          {% else %}
+            {{ v }}
+          {% endif %}
+        </td>
+      </tr>
+      {% endif %}
+      {% endfor %}
+    </table>
+  {% endif %}
+</div>
+{% endfor %}
+
+</body>
+</html>
+"""
+
+
+def _safe_stem(name: str) -> str:
+    stem = re.sub(r'[^A-Za-z0-9._-]+', '_', name).strip('_')
+    return stem or 'sample'
+
+
+def render_sample_pdfs(reports: list, out_dir: Path, generated_at: str) -> None:
+    """One PDF per sample, named <payload-name>-<scan-date>.pdf."""
+    env = Environment(loader=BaseLoader())
+    env.filters['tojson'] = lambda v: json.dumps(v, indent=2)
+    tmpl = env.from_string(SAMPLE_TEMPLATE)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    for r in reports:
+        scan_date = (r.get('scanned_at') or '')[:10] or 'unknown-date'
+        out_path = out_dir / f'{_safe_stem(r["filename"])}-{scan_date}.pdf'
+        html = tmpl.render(r=r, generated_at=generated_at)
+        HTML(string=html, base_url=str(out_dir)).write_pdf(str(out_path))
+        print(f'  Per-sample PDF: {out_path}')
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--input-dir', default='reports/scanner/')
     parser.add_argument('--output',    required=True)
+    parser.add_argument('--per-sample-dir', default='reports/pdf/samples/',
+                        help='Directory for one PDF per sample (payload name + date)')
     args = parser.parse_args()
 
     input_dir = Path(args.input_dir)
@@ -242,9 +364,10 @@ def main():
     env.filters['tojson'] = lambda v: json.dumps(v, indent=2)
     tmpl = env.from_string(TEMPLATE)
 
+    generated_at = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')
     html = tmpl.render(
         reports=reports,
-        generated_at=datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC'),
+        generated_at=generated_at,
         repo=os.environ.get('GITHUB_REPO', 'Xore/Honeypot'),
         run_id=os.environ.get('GITHUB_RUN_ID', 'local'),
     )
@@ -256,6 +379,8 @@ def main():
     HTML(string=html, base_url=str(output.parent)).write_pdf(str(output))
     size_kb = output.stat().st_size // 1024
     print(f'PDF written: {output} ({size_kb} KB)')
+
+    render_sample_pdfs(reports, Path(args.per_sample_dir), generated_at)
 
 
 if __name__ == '__main__':

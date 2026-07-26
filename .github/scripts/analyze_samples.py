@@ -458,6 +458,13 @@ class MalwareBazaarScanner(BaseScanner):
 #   used GET so it was unaffected and masked the real cause. Point BASE at the
 #   bare domain directly to avoid the redirect entirely.
 #
+# FIX (2026-07-f): _submit() only returned the submission acknowledgment
+#   (job_id/sha256) — it never checked the actual sandbox report, so every
+#   scanned sample showed no verdict even after a successful submit. Added
+#   _poll(), mirroring VirusTotalScanner's pattern: poll GET
+#   /report/{job_id}/summary until state leaves IN_QUEUE/IN_PROGRESS, then
+#   surface verdict/threat_score/threat_level like _lookup() does.
+#
 # Current environment IDs per API v2 docs:
 #   100 = Windows 7 32-bit
 #   110 = Windows 7 32-bit (HWP Support)
@@ -529,11 +536,51 @@ class HybridAnalysisScanner(BaseScanner):
             'permalink': f'https://www.hybrid-analysis.com/sample/{sha}',
         }
 
-    def _scan(self, path, hashes, **_):
+    def _poll(self, job_id, sha256):
+        base = {
+            'source': 'hybrid_analysis', 'known': False,
+            'job_id': job_id,
+            'permalink': f'https://www.hybrid-analysis.com/sample/{sha256}',
+        }
+        for attempt in range(20):
+            time.sleep(30)
+            r = requests.get(f'{self.BASE}/report/{job_id}/summary',
+                             headers=self.hdrs, timeout=30)
+            if r.status_code == 404:
+                # Report not indexed yet — keep waiting.
+                log.info(f'  HybridAnalysis poll [{attempt+1}/20] state=not_indexed')
+                continue
+            if r.status_code != 200:
+                return {**base, 'status': 'poll_error',
+                        'error': f'poll HTTP {r.status_code}: {r.text[:120]}'}
+            d = _safe_json(r, self.NAME, 'poll')
+            if d is None:
+                return {**base, 'status': 'poll_error', 'error': 'empty/non-JSON poll body'}
+            state = d.get('state', '')
+            if state in ('IN_QUEUE', 'IN_PROGRESS', ''):
+                log.info(f'  HybridAnalysis poll [{attempt+1}/20] state={state or "unknown"}')
+                continue
+            if state == 'ERROR':
+                return {**base, 'status': 'failed',
+                        'error': d.get('error_message', 'sandbox analysis errored')}
+            return {
+                **base, 'status': 'completed',
+                'verdict':      d.get('verdict'),
+                'threat_score': d.get('threat_score'),
+                'threat_level': d.get('threat_level_human'),
+                'av_detect':    d.get('av_detect'),
+            }
+        return {**base, 'status': 'timeout',
+                'note': 'Sandbox analysis still running; check permalink for results'}
+
+    def _scan(self, path, hashes, wait=True, **_):
         result = self._lookup(hashes['sha256'])
         if result is None:
             log.info(f'  HybridAnalysis: unknown hash, submitting {path.name}...')
-            return self._submit(path)
+            submitted = self._submit(path)
+            if submitted.get('status') == 'failed' or not wait or not submitted.get('job_id'):
+                return submitted
+            return self._poll(submitted['job_id'], submitted.get('sha256', hashes['sha256']))
         if result.get('status') == 'failed':
             return result
         log.info(f'  HybridAnalysis: known → verdict={result.get("verdict")}')
