@@ -29,7 +29,7 @@
 #
 # Action SHA pins (update periodically):
 #   actions/checkout        v4  → 11bd71901bbe5b1630ceea73d27597364c9af683
-#   actions/setup-python    v5  → a26ac4c92c1d8fa03d7a686e25b16bb2af22d7c4
+#   actions/setup-python    v7  → 5fda3b95a4ea91299a34e894583c3862153e4b97
 #   actions/cache           v4  → 5a3ec84eff668545956fd18022155c47e93e2684
 #   actions/upload-artifact v4  → ea165f8d65b6e75b540449e92b4886f43607fa02
 
@@ -92,8 +92,8 @@ jobs:
           echo "$ADDED new sample file(s) detected — continuing."
 
       - name: Set up Python
-        # actions/setup-python v5 — pinned SHA
-        uses: actions/setup-python@a26ac4c92c1d8fa03d7a686e25b16bb2af22d7c4
+        # actions/setup-python v7 — pinned SHA
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: '3.12'
 
