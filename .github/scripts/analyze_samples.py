@@ -1,534 +1,786 @@
 #!/usr/bin/env python3
 """
-Malware Analysis Pipeline
-Submits samples to VirusTotal + JoeSandbox, generates PDF reports,
-updates IOC CSV, and saves everything to reports/
+analyze_samples.py — Xore/Honeypot multi-scanner
 
-Requires env vars: VT_API_KEY, JOESANDBOX_API_KEY
-Requires packages: requests vt-py weasyprint jinja2
+Scanners implemented:
+  1. VirusTotal v3         70+ AV engines, hash lookup + upload
+  2. MalwareBazaar         abuse.ch community DB, family tagging
+  3. Hybrid-Analysis       Falcon Sandbox dynamic analysis
+  4. Malshare              Community malware repository
+  5. JoeSandbox            Deep dynamic analysis (community / paid)
+  6. MetaDefender Cloud    37+ AV engines via OPSWAT
+  7. CAPE Sandbox          Cuckoo fork, config extraction, memory dumps
+  8. Any.run               Interactive cloud sandbox (paid API)
+
+Archive handling:
+  Archives (.zip/.7z/.tar.gz/.rar) are extracted first.
+  Only the raw executables inside are submitted — never the archive.
+  Passwords tried: infected, malware, infected123, virus (configurable)
+
+Hash-first:
+  Every scanner does a hash lookup before uploading.
+  Known samples return results instantly with zero quota spent.
 """
 
-import os
-import sys
-import csv
-import time
-import json
-import hashlib
 import argparse
+import hashlib
+import json
 import logging
+import os
+import shutil
+import sys
+import tempfile
+import time
 from pathlib import Path
-from datetime import datetime, timezone
 
 import requests
-from jinja2 import Template
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
-log = logging.getLogger(__name__)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s %(levelname)-8s %(message)s',
+    datefmt='%H:%M:%S'
+)
+log = logging.getLogger('honeypot.scanner')
 
-VT_API_KEY       = os.environ.get('VT_API_KEY', '')
-JOE_API_KEY      = os.environ.get('JOESANDBOX_API_KEY', '')
-VT_BASE          = 'https://www.virustotal.com/api/v3'
-JOE_BASE         = 'https://jbxcloud.joesecurity.org/api'
-REPORT_DIR       = Path('reports')
-IOC_CSV          = Path('iocs/hashes.csv')
-# Rate limits: VT public = 4 req/min, 500/day
-VT_RATE_SLEEP    = 16   # seconds between VT requests (safe for public API)
-JOE_POLL_SLEEP   = 60   # seconds between JoeSandbox status polls
-JOE_MAX_WAIT     = 1800 # 30 min max wait for Joe analysis
+# ── Constants ────────────────────────────────────────────────────────────────
 
+ARCHIVE_EXTS = {'.zip', '.7z', '.tar', '.gz', '.tgz', '.bz2', '.tbz2', '.xz', '.rar'}
 
-def sha256_of(path: Path) -> str:
-    h = hashlib.sha256()
-    with open(path, 'rb') as f:
-        for chunk in iter(lambda: f.read(65536), b''):
-            h.update(chunk)
-    return h.hexdigest()
+# Binary magic bytes that identify scannable files
+SCANNABLE_MAGIC = [
+    b'MZ',                    # Windows PE (EXE/DLL/SYS/OCX)
+    b'\x7fELF',               # Linux/Unix ELF
+    b'\xca\xfe\xba\xbe',     # Mach-O fat binary
+    b'\xfe\xed\xfa\xce',     # Mach-O 32-bit LE
+    b'\xfe\xed\xfa\xcf',     # Mach-O 64-bit LE
+    b'PK\x03\x04',           # ZIP / JAR / DOCX / XLSX (Office macros)
+    b'%PDF',                  # PDF (weaponized)
+    b'{\\rtf',               # RTF (weaponized)
+    b'\xd0\xcf\x11\xe0',    # OLE2 / legacy Office (DOC/XLS/PPT)
+    b'#!/',                   # Shell/Python/Perl script
+    b'#!/',                   # shebang variants
+]
 
-
-def md5_of(path: Path) -> str:
-    h = hashlib.md5()
-    with open(path, 'rb') as f:
-        for chunk in iter(lambda: f.read(65536), b''):
-            h.update(chunk)
-    return h.hexdigest()
+MAX_UPLOAD_SIZE = 32 * 1024 * 1024  # 32 MB (VT free limit)
 
 
-def sha1_of(path: Path) -> str:
-    h = hashlib.sha1()
-    with open(path, 'rb') as f:
-        for chunk in iter(lambda: f.read(65536), b''):
-            h.update(chunk)
-    return h.hexdigest()
+# ── Utility ──────────────────────────────────────────────────────────────────
+
+def hash_file(path: Path) -> dict:
+    data = path.read_bytes()
+    return {
+        'sha256': hashlib.sha256(data).hexdigest(),
+        'sha1':   hashlib.sha1(data).hexdigest(),
+        'md5':    hashlib.md5(data).hexdigest(),
+        'size':   len(data),
+    }
 
 
-# ─── VirusTotal ───────────────────────────────────────────────────────────────
-
-def vt_headers() -> dict:
-    return {'x-apikey': VT_API_KEY}
-
-
-def vt_check_existing(sha256: str) -> dict | None:
-    """Return existing VT report if the hash is already known."""
-    r = requests.get(f'{VT_BASE}/files/{sha256}', headers=vt_headers(), timeout=30)
-    if r.status_code == 200:
-        return r.json()
-    if r.status_code == 404:
-        return None
-    r.raise_for_status()
-
-
-def vt_upload(path: Path) -> str:
-    """Upload a file to VT. Returns analysis ID."""
-    size = path.stat().st_size
-    if size > 32 * 1024 * 1024:
-        # Get large file upload URL
-        r = requests.get(f'{VT_BASE}/files/upload_url', headers=vt_headers(), timeout=30)
-        r.raise_for_status()
-        upload_url = r.json()['data']
-        time.sleep(VT_RATE_SLEEP)
-    else:
-        upload_url = f'{VT_BASE}/files'
-
-    with open(path, 'rb') as f:
-        r = requests.post(
-            upload_url,
-            headers=vt_headers(),
-            files={'file': (path.name, f, 'application/octet-stream')},
-            timeout=120
-        )
-    r.raise_for_status()
-    analysis_id = r.json()['data']['id']
-    log.info(f'VT upload complete, analysis_id={analysis_id}')
-    return analysis_id
-
-
-def vt_wait_for_analysis(analysis_id: str, max_wait: int = 300) -> dict:
-    """Poll VT analysis endpoint until completed."""
-    deadline = time.time() + max_wait
-    while time.time() < deadline:
-        time.sleep(VT_RATE_SLEEP)
-        r = requests.get(
-            f'{VT_BASE}/analyses/{analysis_id}',
-            headers=vt_headers(),
-            timeout=30
-        )
-        r.raise_for_status()
-        data = r.json()
-        status = data.get('data', {}).get('attributes', {}).get('status', '')
-        if status == 'completed':
-            return data
-        log.info(f'VT analysis status: {status}, waiting...')
-    raise TimeoutError(f'VT analysis {analysis_id} not completed within {max_wait}s')
-
-
-def vt_get_file_report(sha256: str) -> dict:
-    """Fetch full file report after analysis completes."""
-    time.sleep(VT_RATE_SLEEP)
-    r = requests.get(f'{VT_BASE}/files/{sha256}', headers=vt_headers(), timeout=30)
-    r.raise_for_status()
-    return r.json()
-
-
-def vt_get_behaviour(sha256: str) -> dict | None:
-    """Fetch sandbox behaviour summary (premium feature, gracefully skipped)."""
+def is_scannable(path: Path) -> bool:
     try:
-        time.sleep(VT_RATE_SLEEP)
-        r = requests.get(
-            f'{VT_BASE}/files/{sha256}/behaviour_summary',
-            headers=vt_headers(),
-            timeout=30
-        )
-        if r.status_code == 200:
-            return r.json()
-    except Exception as e:
-        log.warning(f'VT behaviour fetch skipped: {e}')
-    return None
-
-
-# ─── JoeSandbox ───────────────────────────────────────────────────────────────
-
-def joe_headers() -> dict:
-    return {'Accept': 'application/json'}
-
-
-def joe_submit(path: Path) -> str | None:
-    """Submit sample to JoeSandbox Cloud. Returns webid."""
-    if not JOE_API_KEY:
-        log.warning('JOESANDBOX_API_KEY not set, skipping JoeSandbox')
-        return None
-    with open(path, 'rb') as f:
-        r = requests.post(
-            f'{JOE_BASE}/v2/analysis/submit',
-            headers=joe_headers(),
-            data={
-                'apikey': JOE_API_KEY,
-                'accept-tac': '1',
-                'report-cache': '1',   # reuse if already analysed
-                'systems': 'ubuntu22x64',
-                'comments': f'honeypot-stack auto-submit {datetime.now(timezone.utc).isoformat()}',
-            },
-            files={'sample': (path.name, f, 'application/octet-stream')},
-            timeout=120
-        )
-    if r.status_code == 200:
-        data = r.json()
-        webid = data.get('data', {}).get('webid')
-        log.info(f'JoeSandbox submitted, webid={webid}')
-        return str(webid)
-    log.warning(f'JoeSandbox submit failed: {r.status_code} {r.text[:200]}')
-    return None
-
-
-def joe_wait_and_download_pdf(webid: str, out_path: Path) -> bool:
-    """Poll Joe until done, then download the PDF report."""
-    deadline = time.time() + JOE_MAX_WAIT
-    while time.time() < deadline:
-        time.sleep(JOE_POLL_SLEEP)
-        r = requests.post(
-            f'{JOE_BASE}/v2/analysis/info',
-            data={'apikey': JOE_API_KEY, 'webid': webid},
-            headers=joe_headers(),
-            timeout=30
-        )
-        if r.status_code != 200:
-            log.warning(f'Joe status check failed: {r.status_code}')
-            continue
-        info = r.json().get('data', {})
-        status = info.get('status', '')
-        log.info(f'JoeSandbox status: {status}')
-        if status == 'finished':
-            # Download PDF
-            pdf_r = requests.post(
-                f'{JOE_BASE}/v2/analysis/download',
-                data={'apikey': JOE_API_KEY, 'webid': webid, 'type': 'pdf'},
-                headers=joe_headers(),
-                timeout=120
-            )
-            if pdf_r.status_code == 200:
-                out_path.parent.mkdir(parents=True, exist_ok=True)
-                out_path.write_bytes(pdf_r.content)
-                log.info(f'JoeSandbox PDF saved: {out_path}')
-                return True
-            else:
-                log.warning(f'Joe PDF download failed: {pdf_r.status_code}')
-                return False
-    log.warning(f'JoeSandbox analysis {webid} timed out')
+        header = path.read_bytes()[:8]
+    except Exception:
+        return False
+    for magic in SCANNABLE_MAGIC:
+        if header[:len(magic)] == magic:
+            return True
+    # Accept binary files even without known magic (unknown/packed malware)
+    if len(header) >= 4:
+        text_chars = sum(1 for b in header if 32 <= b < 127 or b in (9, 10, 13))
+        if text_chars < len(header) * 0.7:  # >30% non-printable = binary
+            return True
     return False
 
 
-# ─── PDF Report Generation (VirusTotal) ──────────────────────────────────────
+# ── Archive extraction ────────────────────────────────────────────────────────
 
-HTML_TEMPLATE = """
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<style>
-  body { font-family: 'DejaVu Sans', Arial, sans-serif; font-size: 11px; margin: 2cm; color: #222; }
-  h1   { color: #c0392b; font-size: 20px; border-bottom: 2px solid #c0392b; padding-bottom: 6px; }
-  h2   { color: #2c3e50; font-size: 14px; margin-top: 20px; }
-  table { border-collapse: collapse; width: 100%; margin-bottom: 16px; }
-  th   { background: #2c3e50; color: white; padding: 6px 8px; text-align: left; }
-  td   { padding: 5px 8px; border-bottom: 1px solid #ddd; }
-  tr:nth-child(even) td { background: #f9f9f9; }
-  .malicious  { color: #c0392b; font-weight: bold; }
-  .suspicious { color: #e67e22; font-weight: bold; }
-  .clean      { color: #27ae60; }
-  .badge-mal  { background:#c0392b; color:white; padding:2px 8px; border-radius:4px; }
-  .badge-sus  { background:#e67e22; color:white; padding:2px 8px; border-radius:4px; }
-  .badge-ok   { background:#27ae60; color:white; padding:2px 8px; border-radius:4px; }
-  .meta       { background:#ecf0f1; padding:10px; border-radius:4px; margin-bottom:16px; }
-  .footer     { margin-top: 30px; font-size:9px; color:#888; border-top:1px solid #ccc; padding-top:6px; }
-</style>
-</head>
-<body>
-<h1>🛡️ Malware Analysis Report</h1>
-<div class="meta">
-  <strong>Generated:</strong> {{ generated_at }}<br>
-  <strong>Source:</strong> honeypot-stack automated pipeline<br>
-  <strong>Repository:</strong> Xore/Honeypot
-</div>
+def extract_archive(path: Path, passwords: list, tmpdir: Path) -> list:
+    suffix = path.suffix.lower()
+    dest = tmpdir / f'{path.stem}_{path.stat().st_size}'
+    dest.mkdir(parents=True, exist_ok=True)
 
-<h2>File Metadata</h2>
-<table>
-  <tr><th>Field</th><th>Value</th></tr>
-  <tr><td>File Name</td><td>{{ name }}</td></tr>
-  <tr><td>SHA-256</td><td><code>{{ sha256 }}</code></td></tr>
-  <tr><td>MD5</td><td><code>{{ md5 }}</code></td></tr>
-  <tr><td>SHA-1</td><td><code>{{ sha1 }}</code></td></tr>
-  <tr><td>File Type</td><td>{{ file_type }}</td></tr>
-  <tr><td>File Size</td><td>{{ file_size }} bytes</td></tr>
-  <tr><td>Magic</td><td>{{ magic }}</td></tr>
-  <tr><td>First Seen (VT)</td><td>{{ first_seen }}</td></tr>
-  <tr><td>Last Analysis</td><td>{{ last_analysis }}</td></tr>
-</table>
+    def _collect():
+        return [f for f in dest.rglob('*') if f.is_file()]
 
-<h2>VirusTotal Detection Summary</h2>
-<table>
-  <tr><th>Verdict</th><th>Count</th><th>Out of</th><th>Detection Rate</th></tr>
-  <tr>
-    <td>
-      {% if malicious > 5 %}<span class="badge-mal">MALICIOUS</span>
-      {% elif malicious > 0 %}<span class="badge-sus">SUSPICIOUS</span>
-      {% else %}<span class="badge-ok">CLEAN</span>{% endif %}
-    </td>
-    <td class="malicious">{{ malicious }}</td>
-    <td>{{ total_engines }}</td>
-    <td>{{ '%.1f'|format(malicious / total_engines * 100 if total_engines > 0 else 0) }}%</td>
-  </tr>
-</table>
-
-<table>
-  <tr><th>Category</th><th>Count</th></tr>
-  <tr><td class="malicious">Malicious</td><td>{{ malicious }}</td></tr>
-  <tr><td class="suspicious">Suspicious</td><td>{{ suspicious }}</td></tr>
-  <tr><td>Undetected</td><td>{{ undetected }}</td></tr>
-  <tr><td>Harmless</td><td>{{ harmless }}</td></tr>
-  <tr><td>Timeout / Error</td><td>{{ timeout }}</td></tr>
-</table>
-
-{% if popular_threat_name %}
-<h2>Threat Classification</h2>
-<table>
-  <tr><th>Field</th><th>Value</th></tr>
-  <tr><td>Suggested Threat Label</td><td><strong>{{ popular_threat_name }}</strong></td></tr>
-  <tr><td>Threat Category</td><td>{{ threat_category }}</td></tr>
-</table>
-{% endif %}
-
-{% if engine_results %}
-<h2>Antivirus Engine Results (Detections Only)</h2>
-<table>
-  <tr><th>Engine</th><th>Category</th><th>Result</th><th>Engine Version</th></tr>
-  {% for row in engine_results %}
-  <tr>
-    <td>{{ row.engine }}</td>
-    <td class="{% if row.category == 'malicious' %}malicious{% elif row.category == 'suspicious' %}suspicious{% endif %}">{{ row.category }}</td>
-    <td>{{ row.result or '—' }}</td>
-    <td>{{ row.version or '—' }}</td>
-  </tr>
-  {% endfor %}
-</table>
-{% endif %}
-
-{% if tags %}
-<h2>Tags</h2>
-<p>{{ tags | join(', ') }}</p>
-{% endif %}
-
-{% if vt_link %}
-<h2>VirusTotal Link</h2>
-<p><a href="{{ vt_link }}">{{ vt_link }}</a></p>
-{% endif %}
-
-<div class="footer">
-  Generated by honeypot-stack analysis pipeline &bull; {{ generated_at }} &bull; Data source: VirusTotal API v3
-</div>
-</body>
-</html>
-"""
-
-
-def build_pdf_from_vt(vt_report: dict, hashes: dict, out_path: Path) -> bool:
-    """Render HTML from VT report and convert to PDF using weasyprint."""
     try:
-        from weasyprint import HTML as WP_HTML
-    except ImportError:
-        log.warning('weasyprint not available, skipping PDF generation')
-        return False
+        if suffix == '.zip':
+            import pyzipper
+            for pwd in ([''] + passwords):
+                try:
+                    with pyzipper.AESZipFile(path) as zf:
+                        zf.extractall(dest, pwd=pwd.encode() if pwd else None)
+                    log.info(f'  Extracted ZIP {path.name} (pwd={repr(pwd)})')
+                    return _collect()
+                except (RuntimeError, Exception):
+                    continue
+            log.warning(f'  ZIP extraction failed (wrong password?): {path.name}')
 
-    attrs = vt_report.get('data', {}).get('attributes', {})
-    stats = attrs.get('last_analysis_stats', {})
-    results = attrs.get('last_analysis_results', {})
+        elif suffix == '.7z':
+            import py7zr
+            for pwd in ([''] + passwords):
+                try:
+                    with py7zr.SevenZipFile(path, mode='r', password=pwd or None) as z:
+                        z.extractall(dest)
+                    log.info(f'  Extracted 7z {path.name}')
+                    return _collect()
+                except Exception:
+                    continue
 
-    engine_rows = [
-        {
-            'engine': eng,
-            'category': det.get('category', ''),
-            'result': det.get('result', ''),
-            'version': det.get('engine_version', ''),
-        }
-        for eng, det in results.items()
-        if det.get('category') in ('malicious', 'suspicious')
-    ]
-    engine_rows.sort(key=lambda x: x['category'])
+        elif suffix in ('.tar', '.gz', '.tgz', '.bz2', '.tbz2', '.xz'):
+            import tarfile
+            with tarfile.open(path) as tf:
+                tf.extractall(dest)
+            log.info(f'  Extracted tar {path.name}')
+            return _collect()
 
-    total = sum(stats.values())
-    popular = attrs.get('popular_threat_classification', {})
-
-    ctx = {
-        'generated_at': datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC'),
-        'name': attrs.get('meaningful_name', hashes.get('sha256', '')[:16]),
-        'sha256': hashes['sha256'],
-        'md5': hashes['md5'],
-        'sha1': hashes['sha1'],
-        'file_type': attrs.get('type_description', attrs.get('type_tag', 'Unknown')),
-        'file_size': attrs.get('size', '?'),
-        'magic': attrs.get('magic', ''),
-        'first_seen': attrs.get('first_submission_date', ''),
-        'last_analysis': attrs.get('last_analysis_date', ''),
-        'malicious': stats.get('malicious', 0),
-        'suspicious': stats.get('suspicious', 0),
-        'undetected': stats.get('undetected', 0),
-        'harmless': stats.get('harmless', 0),
-        'timeout': stats.get('timeout', 0) + stats.get('type-unsupported', 0),
-        'total_engines': total,
-        'engine_results': engine_rows,
-        'popular_threat_name': popular.get('suggested_threat_label', ''),
-        'threat_category': popular.get('popular_threat_category', [{}])[0].get('value', '') if popular.get('popular_threat_category') else '',
-        'tags': attrs.get('tags', []),
-        'vt_link': f'https://www.virustotal.com/gui/file/{hashes["sha256"]}',
-    }
-
-    html = Template(HTML_TEMPLATE).render(**ctx)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    WP_HTML(string=html).write_pdf(str(out_path))
-    log.info(f'VT PDF report saved: {out_path}')
-    return True
+        elif suffix == '.rar':
+            import rarfile
+            for pwd in ([''] + passwords):
+                try:
+                    with rarfile.RarFile(path) as rf:
+                        rf.extractall(dest, pwd=pwd or None)
+                    log.info(f'  Extracted RAR {path.name}')
+                    return _collect()
+                except Exception:
+                    continue
+    except Exception as e:
+        log.warning(f'  Extraction error for {path.name}: {e}')
+    return []
 
 
-# ─── IOC CSV update ───────────────────────────────────────────────────────────
-
-def update_ioc_csv(hashes: dict, family: str, sample_type: str,
-                   vt_report: dict | None, joe_score: str = ''):
-    IOC_CSV.parent.mkdir(parents=True, exist_ok=True)
-    existing = {}
-    if IOC_CSV.exists():
-        with open(IOC_CSV, newline='') as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                existing[row['sha256']] = row
-
-    if vt_report:
-        attrs = vt_report.get('data', {}).get('attributes', {})
-        stats = attrs.get('last_analysis_stats', {})
-        total = sum(stats.values())
-        mal = stats.get('malicious', 0)
-    else:
-        total = mal = 0
-
-    existing[hashes['sha256']] = {
-        'sha256': hashes['sha256'],
-        'md5': hashes['md5'],
-        'sha1': hashes['sha1'],
-        'family': family,
-        'type': sample_type,
-        'source': 'cowrie/dionaea',
-        'date_captured': datetime.now(timezone.utc).strftime('%Y-%m-%d'),
-        'vt_detections': mal,
-        'vt_total': total,
-        'joesandbox_score': joe_score,
-    }
-
-    fieldnames = ['sha256','md5','sha1','family','type','source','date_captured',
-                  'vt_detections','vt_total','joesandbox_score']
-    with open(IOC_CSV, 'w', newline='') as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(existing.values())
-    log.info(f'IOC CSV updated: {IOC_CSV}')
+def expand_file(path: Path, passwords: list, tmpdir: Path) -> list:
+    """Return list of scannable files from path (extracting archives)."""
+    if path.suffix.lower() in ARCHIVE_EXTS:
+        extracted = extract_archive(path, passwords, tmpdir)
+        if extracted:
+            results = []
+            for f in extracted:
+                results.extend(expand_file(f, passwords, tmpdir))
+            return results
+    if is_scannable(path):
+        return [path]
+    log.debug(f'  Skipping non-scannable: {path.name}')
+    return []
 
 
-# ─── Main ─────────────────────────────────────────────────────────────────────
+# ── Scanner 1: VirusTotal v3 ─────────────────────────────────────────────────
 
-def infer_type_and_family(path: Path) -> tuple[str, str]:
-    parts = path.parts
-    if 'ELF' in parts:     return 'ELF', 'unknown'
-    if 'PE' in parts:      return 'PE',  'unknown'
-    if 'Miori' in parts:   return 'ELF', 'Miori'
-    if 'Scripts' in parts: return 'Script', 'dropper'
-    return 'unknown', 'unknown'
+class VirusTotalScanner:
+    """VirusTotal v3 — 70+ AV engines.
+    Free: 4 req/min, 500 uploads/day.
+    Register: https://www.virustotal.com
+    Docs: https://developers.virustotal.com/reference
+    """
+    NAME = 'VirusTotal'
+    BASE = 'https://www.virustotal.com/api/v3'
 
+    def __init__(self, key):
+        self.key = key
+        self.hdrs = {'x-apikey': key}
+        self._last = 0
 
-def analyze_sample(sample_path: Path):
-    if not sample_path.exists():
-        log.warning(f'File not found: {sample_path}')
-        return
-    if sample_path.name == '.gitkeep':
-        return
+    def _wait(self):
+        gap = time.time() - self._last
+        if gap < 16:
+            time.sleep(16 - gap)
+        self._last = time.time()
 
-    log.info(f'--- Analyzing: {sample_path} ---')
+    def lookup(self, sha256):
+        self._wait()
+        r = requests.get(f'{self.BASE}/files/{sha256}', headers=self.hdrs, timeout=30)
+        if r.status_code == 200:
+            attr = r.json().get('data', {}).get('attributes', {})
+            stats = attr.get('last_analysis_stats', {})
+            return {
+                'source': 'virustotal', 'known': True,
+                'positives': stats.get('malicious', 0),
+                'suspicious': stats.get('suspicious', 0),
+                'total': sum(stats.values()),
+                'stats': stats,
+                'names': attr.get('names', []),
+                'type_description': attr.get('type_description', ''),
+                'permalink': f'https://www.virustotal.com/gui/file/{sha256}',
+            }
+        return None
 
-    hashes = {
-        'sha256': sha256_of(sample_path),
-        'md5':    md5_of(sample_path),
-        'sha1':   sha1_of(sample_path),
-    }
-    sample_type, family = infer_type_and_family(sample_path)
-    sha = hashes['sha256']
-
-    vt_report_path  = REPORT_DIR / 'virustotal' / f'{sha}.json'
-    vt_pdf_path     = REPORT_DIR / 'virustotal' / f'{sha}.pdf'
-    joe_pdf_path    = REPORT_DIR / 'joesandbox' / f'{sha}_joesandbox.pdf'
-
-    # ── VirusTotal ──
-    vt_report = None
-    if VT_API_KEY:
-        log.info(f'Checking VT for existing report: {sha}')
-        vt_report = vt_check_existing(sha)
-
-        if vt_report is None:
-            log.info('Not found in VT, uploading...')
-            try:
-                analysis_id = vt_upload(sample_path)
-                vt_wait_for_analysis(analysis_id)
-                vt_report = vt_get_file_report(sha)
-            except Exception as e:
-                log.error(f'VT upload/analysis failed: {e}')
+    def upload(self, path):
+        self._wait()
+        if path.stat().st_size > MAX_UPLOAD_SIZE:
+            r = requests.get(f'{self.BASE}/files/upload_url',
+                             headers=self.hdrs, timeout=30)
+            url = r.json().get('data')
         else:
-            log.info('VT report already exists (cache hit)')
+            url = f'{self.BASE}/files'
+        with open(path, 'rb') as fh:
+            r = requests.post(url, headers=self.hdrs,
+                              files={'file': (path.name, fh)}, timeout=120)
+        r.raise_for_status()
+        aid = r.json()['data']['id']
+        log.info(f'  VT uploaded → analysis {aid}')
+        return {'source': 'virustotal', 'known': False, 'analysis_id': aid,
+                'permalink': f'https://www.virustotal.com/gui/file-analysis/{aid}'}
 
-        if vt_report:
-            vt_report_path.parent.mkdir(parents=True, exist_ok=True)
-            vt_report_path.write_text(json.dumps(vt_report, indent=2))
-            build_pdf_from_vt(vt_report, hashes, vt_pdf_path)
-    else:
-        log.warning('VT_API_KEY not set, skipping VirusTotal')
+    def poll(self, aid):
+        for _ in range(24):
+            self._wait()
+            r = requests.get(f'{self.BASE}/analyses/{aid}',
+                             headers=self.hdrs, timeout=30)
+            attr = r.json().get('data', {}).get('attributes', {})
+            if attr.get('status') == 'completed':
+                stats = attr.get('stats', {})
+                return {'positives': stats.get('malicious', 0),
+                        'total': sum(stats.values()), 'stats': stats}
+            log.info(f'  VT analysis {attr.get("status")}...')
+            time.sleep(30)
+        return {'status': 'timeout'}
 
-    # ── JoeSandbox ──
-    joe_score = ''
-    if JOE_API_KEY:
-        webid = joe_submit(sample_path)
-        if webid:
-            joe_wait_and_download_pdf(webid, joe_pdf_path)
-            joe_score = webid  # store webid as reference
-    else:
-        log.warning('JOESANDBOX_API_KEY not set, skipping JoeSandbox')
+    def scan(self, path, hashes, wait=True):
+        r = self.lookup(hashes['sha256'])
+        if r:
+            log.info(f'  VT: known → {r["positives"]}/{r["total"]}')
+            return r
+        r = self.upload(path)
+        if wait and 'analysis_id' in r:
+            r.update(self.poll(r['analysis_id']))
+        return r
 
-    # ── IOC update ──
-    update_ioc_csv(hashes, family, sample_type, vt_report, joe_score)
 
-    log.info(f'Done: {sha}')
+# ── Scanner 2: MalwareBazaar ─────────────────────────────────────────────────
+
+class MalwareBazaarScanner:
+    """abuse.ch MalwareBazaar — community malware DB.
+    Free. Register: https://bazaar.abuse.ch
+    Docs: https://bazaar.abuse.ch/api/
+    """
+    NAME = 'MalwareBazaar'
+    BASE = 'https://mb-api.abuse.ch/api/v1/'
+
+    def __init__(self, key):
+        self.key = key
+
+    def lookup(self, sha256):
+        r = requests.post(self.BASE,
+                          data={'query': 'get_info', 'hash': sha256}, timeout=30)
+        d = r.json()
+        if d.get('query_status') == 'ok':
+            i = d['data'][0]
+            return {
+                'source': 'malwarebazaar', 'known': True,
+                'signature': i.get('signature'),
+                'file_type': i.get('file_type'),
+                'tags': i.get('tags', []),
+                'first_seen': i.get('first_seen'),
+                'reporter': i.get('reporter'),
+                'permalink': f'https://bazaar.abuse.ch/sample/{sha256}/',
+            }
+        return None
+
+    def upload(self, path):
+        with open(path, 'rb') as fh:
+            r = requests.post(
+                self.BASE,
+                data={'query': 'upload_sample', 'delivery_method': 'other',
+                      'tags': json.dumps(['honeypot', 'honeypot-xore']),
+                      'api_key': self.key},
+                files={'file': (path.name, fh)}, timeout=120)
+        d = r.json()
+        sha = d.get('data', {}).get('sha256_hash', '')
+        return {'source': 'malwarebazaar', 'known': False,
+                'submitted': d.get('query_status') == 'sample_submitted',
+                'sha256': sha,
+                'permalink': f'https://bazaar.abuse.ch/sample/{sha}/'}
+
+    def scan(self, path, hashes, **_):
+        r = self.lookup(hashes['sha256'])
+        if r:
+            log.info(f'  MalwareBazaar: known → {r.get("signature")}')
+            return r
+        log.info(f'  MalwareBazaar: uploading {path.name}...')
+        return self.upload(path)
+
+
+# ── Scanner 3: Hybrid-Analysis ───────────────────────────────────────────────
+
+class HybridAnalysisScanner:
+    """Hybrid-Analysis / Falcon Sandbox — dynamic analysis.
+    Free tier. Register: https://www.hybrid-analysis.com
+    Docs: https://www.hybrid-analysis.com/docs/api/v2
+    """
+    NAME = 'HybridAnalysis'
+    BASE = 'https://www.hybrid-analysis.com/api/v2'
+
+    def __init__(self, key):
+        self.hdrs = {'api-key': key, 'User-Agent': 'Falcon Sandbox', 'accept': 'application/json'}
+
+    def lookup(self, sha256):
+        r = requests.get(f'{self.BASE}/search/hash',
+                         params={'hash': sha256}, headers=self.hdrs, timeout=30)
+        if r.status_code == 200 and r.json():
+            t = r.json()[0]
+            return {
+                'source': 'hybrid_analysis', 'known': True,
+                'verdict': t.get('verdict'),
+                'threat_score': t.get('threat_score'),
+                'threat_level': t.get('threat_level_human'),
+                'av_detect': t.get('av_detect'),
+                'job_id': t.get('job_id'),
+                'permalink': f'https://www.hybrid-analysis.com/sample/{sha256}',
+            }
+        return None
+
+    def submit(self, path, env_id=120):  # 120 = Win10 64-bit
+        with open(path, 'rb') as fh:
+            r = requests.post(
+                f'{self.BASE}/submit/file',
+                headers=self.hdrs,
+                data={'environment_id': env_id, 'allow_community_access': True,
+                      'comment': 'honeypot-xore automated submission'},
+                files={'file': (path.name, fh)}, timeout=120)
+        if r.status_code in (200, 201):
+            d = r.json()
+            return {
+                'source': 'hybrid_analysis', 'known': False,
+                'job_id': d.get('job_id'), 'sha256': d.get('sha256'),
+                'permalink': f'https://www.hybrid-analysis.com/sample/{d.get("sha256","")}',
+            }
+        return {'source': 'hybrid_analysis', 'error': r.text[:200]}
+
+    def scan(self, path, hashes, **_):
+        r = self.lookup(hashes['sha256'])
+        if r:
+            log.info(f'  HybridAnalysis: known → verdict={r.get("verdict")}')
+            return r
+        log.info(f'  HybridAnalysis: submitting {path.name}...')
+        return self.submit(path)
+
+
+# ── Scanner 4: Malshare ───────────────────────────────────────────────────────
+
+class MalshareScanner:
+    """Malshare — community malware repository.
+    Free, 2000 req/day. Register: https://malshare.com/register.php
+    Docs: https://malshare.com/doc.php
+    """
+    NAME = 'Malshare'
+    BASE = 'https://malshare.com/api.php'
+
+    def __init__(self, key):
+        self.key = key
+
+    def lookup(self, sha256):
+        r = requests.get(self.BASE,
+                         params={'api_key': self.key, 'action': 'details', 'hash': sha256},
+                         timeout=30)
+        if r.status_code == 200:
+            d = r.json()
+            if d.get('SHA256'):
+                return {
+                    'source': 'malshare', 'known': True,
+                    'type': d.get('F_TYPE'), 'sources': d.get('SOURCES', []),
+                    'permalink': f'https://malshare.com/sample.php?action=detail&hash={sha256}',
+                }
+        return None
+
+    def upload(self, path):
+        with open(path, 'rb') as fh:
+            r = requests.post(self.BASE,
+                              params={'api_key': self.key, 'action': 'upload'},
+                              files={'upload': (path.name, fh)}, timeout=120)
+        return {'source': 'malshare', 'known': False,
+                'submitted': r.status_code == 200, 'response': r.text[:100]}
+
+    def scan(self, path, hashes, **_):
+        r = self.lookup(hashes['sha256'])
+        if r:
+            log.info(f'  Malshare: known')
+            return r
+        log.info(f'  Malshare: uploading {path.name}...')
+        return self.upload(path)
+
+
+# ── Scanner 5: JoeSandbox ────────────────────────────────────────────────────
+
+class JoeSandboxScanner:
+    """JoeSandbox Cloud — deep behavioural analysis.
+    Community (free, public) or paid plans.
+    Register: https://www.joesandbox.com
+    Docs: https://jbxcloud.joesecurity.org/userguide?sphinxurl=usage/webapi.html
+    """
+    NAME = 'JoeSandbox'
+    BASE = 'https://www.joesandbox.com/api/v2'
+
+    def __init__(self, key):
+        self.key = key
+
+    def lookup(self, sha256):
+        r = requests.post(
+            f'{self.BASE}/analysis/search',
+            data={'apikey': self.key, 'q': sha256},
+            timeout=30)
+        if r.status_code == 200:
+            d = r.json()
+            if d.get('data'):
+                a = d['data'][0]
+                return {
+                    'source': 'joesandbox', 'known': True,
+                    'webid': a.get('webid'),
+                    'detection': a.get('detection'),
+                    'score': a.get('score'),
+                    'permalink': f'https://www.joesandbox.com/analysis/{a.get("webid")}/0/html',
+                }
+        return None
+
+    def submit(self, path):
+        with open(path, 'rb') as fh:
+            r = requests.post(
+                f'{self.BASE}/submission/new',
+                data={
+                    'apikey': self.key,
+                    'accept-tac': 1,
+                    'comments': 'honeypot-xore automated',
+                    'internet-access': 0,  # isolated run
+                },
+                files={'sample': (path.name, fh)},
+                timeout=120)
+        if r.status_code == 200:
+            d = r.json().get('data', {})
+            submission_id = d.get('submission_id')
+            return {
+                'source': 'joesandbox', 'known': False,
+                'submission_id': submission_id,
+                'permalink': f'https://www.joesandbox.com/submission/{submission_id}',
+            }
+        return {'source': 'joesandbox', 'error': r.text[:200]}
+
+    def scan(self, path, hashes, **_):
+        r = self.lookup(hashes['sha256'])
+        if r:
+            log.info(f'  JoeSandbox: known → detection={r.get("detection")}')
+            return r
+        log.info(f'  JoeSandbox: submitting {path.name}...')
+        return self.submit(path)
+
+
+# ── Scanner 6: MetaDefender Cloud (OPSWAT) ───────────────────────────────────
+
+class MetaDefenderScanner:
+    """MetaDefender Cloud — 37+ AV engines + data sanitization.
+    Free tier: 10 uploads/day, unlimited hash lookups.
+    Register: https://metadefender.opswat.com
+    Docs: https://onlinehelp.opswat.com/mdcloud/
+    """
+    NAME = 'MetaDefender'
+    BASE = 'https://api.metadefender.com/v4'
+
+    def __init__(self, key):
+        self.hdrs = {'apikey': key}
+
+    def lookup(self, sha256):
+        r = requests.get(f'{self.BASE}/hash/{sha256}',
+                         headers=self.hdrs, timeout=30)
+        if r.status_code == 200:
+            d = r.json()
+            scan = d.get('scan_results', {})
+            if scan.get('scan_all_result_i') is not None:
+                stats = scan.get('total_avs', 0)
+                detected = scan.get('total_detected_avs', 0)
+                return {
+                    'source': 'metadefender', 'known': True,
+                    'positives': detected,
+                    'total': stats,
+                    'scan_result': scan.get('scan_all_result_a', ''),
+                    'file_info': d.get('file_info', {}),
+                    'permalink': f'https://metadefender.opswat.com/results/file/{sha256}/regular/overview',
+                }
+        return None
+
+    def upload(self, path):
+        hdrs = {**self.hdrs, 'filename': path.name, 'samplesharing': '1'}
+        with open(path, 'rb') as fh:
+            r = requests.post(f'{self.BASE}/file',
+                              headers=hdrs, data=fh, timeout=120)
+        if r.status_code == 200:
+            data_id = r.json().get('data_id')
+            log.info(f'  MetaDefender: uploaded → data_id={data_id}')
+            return {'source': 'metadefender', 'known': False, 'data_id': data_id,
+                    'permalink': f'https://metadefender.opswat.com/results/file/{data_id}/regular/overview'}
+        return {'source': 'metadefender', 'error': r.text[:200]}
+
+    def poll(self, data_id):
+        for _ in range(20):
+            time.sleep(15)
+            r = requests.get(f'{self.BASE}/file/{data_id}',
+                             headers=self.hdrs, timeout=30)
+            if r.status_code == 200:
+                d = r.json()
+                scan = d.get('scan_results', {})
+                prog = scan.get('progress_percentage', 0)
+                if prog == 100:
+                    return {
+                        'positives': scan.get('total_detected_avs', 0),
+                        'total': scan.get('total_avs', 0),
+                        'scan_result': scan.get('scan_all_result_a', ''),
+                    }
+                log.info(f'  MetaDefender: scan {prog}%...')
+        return {'status': 'timeout'}
+
+    def scan(self, path, hashes, wait=True):
+        r = self.lookup(hashes['sha256'])
+        if r:
+            log.info(f'  MetaDefender: known → {r["positives"]}/{r["total"]}')
+            return r
+        log.info(f'  MetaDefender: uploading {path.name}...')
+        r = self.upload(path)
+        if wait and 'data_id' in r:
+            r.update(self.poll(r['data_id']))
+        return r
+
+
+# ── Scanner 7: CAPE Sandbox ───────────────────────────────────────────────────
+
+class CAPESandboxScanner:
+    """CAPE Sandbox — Cuckoo fork with config extraction.
+    Self-hosted or public: https://capesandbox.com
+    Docs: https://capesandbox.com/apiv2/
+    """
+    NAME = 'CAPE'
+
+    def __init__(self, base_url, api_key=None):
+        self.base = base_url.rstrip('/')
+        self.hdrs = {'Authorization': f'Token {api_key}'} if api_key else {}
+
+    def lookup(self, sha256):
+        try:
+            r = requests.get(f'{self.base}/apiv2/tasks/search/sha256/{sha256}/',
+                             headers=self.hdrs, timeout=30)
+            if r.status_code == 200 and r.json().get('data'):
+                t = r.json()['data'][0]
+                return {
+                    'source': 'cape', 'known': True,
+                    'task_id': t.get('id'), 'status': t.get('status'),
+                    'malscore': t.get('malscore'),
+                    'permalink': f'{self.base}/analysis/{t.get("id")}/summary/',
+                }
+        except Exception:
+            pass
+        return None
+
+    def submit(self, path):
+        try:
+            with open(path, 'rb') as fh:
+                r = requests.post(
+                    f'{self.base}/apiv2/tasks/create/file/',
+                    headers=self.hdrs,
+                    files={'file': (path.name, fh)},
+                    data={'options': 'procmemdump=1,hollowshunter=1'},
+                    timeout=120)
+            if r.status_code == 200:
+                tid = r.json().get('data', {}).get('task_id')
+                return {'source': 'cape', 'known': False, 'task_id': tid,
+                        'permalink': f'{self.base}/analysis/{tid}/summary/'}
+        except Exception as e:
+            return {'source': 'cape', 'error': str(e)}
+        return {'source': 'cape', 'error': 'submission failed'}
+
+    def scan(self, path, hashes, **_):
+        r = self.lookup(hashes['sha256'])
+        if r:
+            log.info(f'  CAPE: known → task={r.get("task_id")} score={r.get("malscore")}')
+            return r
+        log.info(f'  CAPE: submitting {path.name}...')
+        return self.submit(path)
+
+
+# ── Scanner 8: Any.run ────────────────────────────────────────────────────────
+
+class AnyRunScanner:
+    """Any.run — interactive cloud sandbox.
+    Requires paid API plan. Register: https://any.run
+    Docs: https://any.run/api-documentation/
+    """
+    NAME = 'AnyRun'
+    BASE = 'https://api.any.run/v1'
+
+    def __init__(self, key):
+        self.auth = {'Authorization': f'API-Key {key}'}
+
+    def submit(self, path):
+        with open(path, 'rb') as fh:
+            r = requests.post(f'{self.BASE}/file',
+                              headers=self.auth,
+                              files={'file': (path.name, fh)}, timeout=120)
+        if r.status_code not in (200, 201):
+            return {'source': 'anyrun', 'error': r.text[:200]}
+        file_uuid = r.json().get('data', {}).get('fileUUID')
+        r2 = requests.post(
+            f'{self.BASE}/analysis',
+            headers={**self.auth, 'Content-Type': 'application/json'},
+            json={'env': {'OS': 'windows', 'Bitness': 64, 'Type': 'complete'},
+                  'obj': {'type': 'file', 'fileUUID': file_uuid}},
+            timeout=60)
+        if r2.status_code in (200, 201):
+            tid = r2.json().get('data', {}).get('taskid')
+            return {'source': 'anyrun', 'known': False, 'task_id': tid,
+                    'permalink': f'https://app.any.run/tasks/{tid}'}
+        return {'source': 'anyrun', 'error': r2.text[:200]}
+
+    def scan(self, path, hashes, **_):
+        log.info(f'  Any.run: submitting {path.name}...')
+        return self.submit(path)
+
+
+# ── IOC extraction ────────────────────────────────────────────────────────────
+
+def extract_iocs(report: dict, ioc_dir: Path):
+    """Append new IOCs to iocs/ CSV files."""
+    sha256 = report['sha256']
+    ioc_dir.mkdir(parents=True, exist_ok=True)
+
+    # Hashes
+    hashes_file = ioc_dir / 'hashes.csv'
+    if not hashes_file.exists():
+        hashes_file.write_text('sha256,sha1,md5,filename,first_seen\n')
+    existing = hashes_file.read_text()
+    if sha256 not in existing:
+        with open(hashes_file, 'a') as f:
+            ts = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
+            f.write(f'{sha256},{report["sha1"]},{report["md5"]},{report["filename"]},{ts}\n')
+
+    # VT names → malware families
+    vt = report.get('results', {}).get('VirusTotalScanner', {})
+    for name in vt.get('names', []):
+        families_file = ioc_dir / 'families.csv'
+        if not families_file.exists():
+            families_file.write_text('sha256,name\n')
+        with open(families_file, 'a') as f:
+            f.write(f'{sha256},{name}\n')
+
+
+# ── Main ──────────────────────────────────────────────────────────────────────
+
+def build_scanners():
+    scanners = []
+    checks = [
+        ('VT_API_KEY',           lambda k: VirusTotalScanner(k),         'VirusTotal'),
+        ('MALWAREBAZAAR_API_KEY',lambda k: MalwareBazaarScanner(k),      'MalwareBazaar'),
+        ('HYBRID_ANALYSIS_KEY',  lambda k: HybridAnalysisScanner(k),     'HybridAnalysis'),
+        ('MALSHARE_API_KEY',     lambda k: MalshareScanner(k),           'Malshare'),
+        ('JOESANDBOX_API_KEY',   lambda k: JoeSandboxScanner(k),         'JoeSandbox'),
+        ('METADEFENDER_API_KEY', lambda k: MetaDefenderScanner(k),       'MetaDefender'),
+        ('ANYRUN_API_KEY',       lambda k: AnyRunScanner(k),             'Any.run'),
+    ]
+    for env_var, factory, name in checks:
+        if k := os.environ.get(env_var):
+            scanners.append(factory(k))
+            log.info(f'[+] {name} enabled')
+
+    # CAPE needs URL
+    if url := os.environ.get('CAPE_API_URL'):
+        scanners.append(CAPESandboxScanner(url, os.environ.get('CAPE_API_KEY', '')))
+        log.info(f'[+] CAPE enabled ({url})')
+
+    if not scanners:
+        log.error('No scanner API keys set. Configure at least VT_API_KEY.')
+        sys.exit(1)
+    return scanners
+
+
+def scan_file(path: Path, scanners: list, output_dir: Path,
+              ioc_dir: Path, wait: bool) -> dict:
+    hashes = hash_file(path)
+    sha256 = hashes['sha256']
+    log.info(f'\n{"─"*60}')
+    log.info(f'Scanning: {path.name}')
+    log.info(f'  SHA256: {sha256}')
+    log.info(f'  Size:   {hashes["size"]:,} bytes')
+
+    report = {
+        'file': str(path),
+        'filename': path.name,
+        'sha256': sha256,
+        'sha1':   hashes['sha1'],
+        'md5':    hashes['md5'],
+        'size':   hashes['size'],
+        'scanned_at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
+        'results': {},
+    }
+
+    for scanner in scanners:
+        name = scanner.__class__.__name__
+        try:
+            result = scanner.scan(path, hashes, wait=wait)
+            report['results'][name] = result
+        except Exception as e:
+            log.error(f'  {name} error: {e}')
+            report['results'][name] = {'error': str(e)}
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    out = output_dir / f'{sha256}.json'
+    out.write_text(json.dumps(report, indent=2))
+    log.info(f'  → {out}')
+
+    if ioc_dir:
+        extract_iocs(report, ioc_dir)
+
+    return report
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Malware Analysis Pipeline')
-    parser.add_argument('--file-list', help='File with list of sample paths')
-    parser.add_argument('--sample', help='Single sample path to analyze')
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--file-list',         required=True)
+    parser.add_argument('--output-dir',        default='reports/scanner/')
+    parser.add_argument('--ioc-dir',           default='iocs/')
+    parser.add_argument('--archive-passwords', default='infected,malware,infected123,virus')
+    parser.add_argument('--wait-results',      action='store_true')
     args = parser.parse_args()
 
-    paths = []
-    if args.file_list:
-        with open(args.file_list) as f:
-            paths = [Path(line.strip()) for line in f if line.strip()]
-    elif args.sample:
-        paths = [Path(args.sample)]
-    else:
-        # Scan all samples directories
-        for p in Path('samples').rglob('*'):
-            if p.is_file() and p.name != '.gitkeep':
-                paths.append(p)
+    passwords  = [p.strip() for p in args.archive_passwords.split(',') if p.strip()]
+    output_dir = Path(args.output_dir)
+    ioc_dir    = Path(args.ioc_dir)
+    scanners   = build_scanners()
+    tmpdir     = Path(tempfile.mkdtemp(prefix='honeypot_scan_'))
 
-    if not paths:
-        log.info('No samples to analyze.')
+    lines = [
+        l.strip() for l in Path(args.file_list).read_text().splitlines()
+        if l.strip() and not l.startswith('#')
+    ]
+    if not lines:
+        log.info('No files to scan.')
         return
 
-    for p in paths:
-        try:
-            analyze_sample(p)
-        except Exception as e:
-            log.error(f'Error analyzing {p}: {e}', exc_info=True)
-        time.sleep(2)  # courtesy pause between samples
+    log.info(f'Input files:  {len(lines)}')
+    log.info(f'Passwords:    {passwords}')
+    log.info(f'Scanners:     {[s.__class__.__name__ for s in scanners]}')
+    log.info(f'Wait results: {args.wait_results}')
+
+    all_reports = []
+    try:
+        for line in lines:
+            p = Path(line)
+            if not p.exists():
+                log.warning(f'Not found: {p}')
+                continue
+            to_scan = expand_file(p, passwords, tmpdir)
+            if not to_scan:
+                log.info(f'Skipping (not scannable): {p.name}')
+                continue
+            for f in to_scan:
+                if f.stat().st_size == 0:
+                    continue
+                r = scan_file(f, scanners, output_dir, ioc_dir, args.wait_results)
+                all_reports.append(r)
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+    log.info(f'\n{"="*60}')
+    log.info(f'Total scanned: {len(all_reports)}')
+    for r in all_reports:
+        vt  = r['results'].get('VirusTotalScanner', {})
+        pos = vt.get('positives', '?')
+        tot = vt.get('total', '?')
+        md  = r['results'].get('MetaDefenderScanner', {})
+        md_pos = md.get('positives', '-')
+        log.info(f'  {r["sha256"][:16]}… {r["filename"]:30s} VT:{pos}/{tot} MD:{md_pos}')
 
 
 if __name__ == '__main__':

@@ -1,29 +1,62 @@
+# analyze.yml — Xore/Honeypot multi-scanner pipeline
+#
+# Triggers on new files in: ELF/ Miori/ UNKWN/ samples/
+#
+# Flow:
+#   1. Detect changed files in commit (or all if workflow_dispatch)
+#   2. Extract archives (zip/7z/tar/gz — password: infected)
+#   3. Hash-lookup each file on all scanners before uploading
+#   4. Upload unknown executables to all configured scanners
+#   5. Write per-sample JSON report to reports/scanner/<sha256>.json
+#   6. Commit reports/ + iocs/ back to repo
+#
+# Required secrets (Settings → Secrets → Actions):
+#   GH_PAT                  GitHub PAT (repo + workflow scope)
+#   VT_API_KEY              VirusTotal v3 (free: 4 req/min, 500/day)
+#   MALWAREBAZAAR_API_KEY   abuse.ch (free)
+#   HYBRID_ANALYSIS_KEY     Hybrid-Analysis / Falcon Sandbox (free tier)
+#   MALSHARE_API_KEY        Malshare (free, 2k/day)
+#   JOESANDBOX_API_KEY      JoeSandbox Cloud (paid / free community)
+#   METADEFENDER_API_KEY    MetaDefender Cloud (free tier)
+#   CAPE_API_URL            CAPE Sandbox URL (self-hosted or public)
+#   CAPE_API_KEY            CAPE API key (optional)
+#   ANYRUN_API_KEY          Any.run (paid API)
+
 name: Malware Analysis Pipeline
 
 on:
   push:
+    branches: [main]
     paths:
+      - 'ELF/**'
+      - 'Miori/**'
+      - 'UNKWN/**'
       - 'samples/**'
   workflow_dispatch:
     inputs:
       sample_path:
-        description: 'Path to sample file (e.g. samples/ELF/myfile)'
+        description: 'Path to scan (file or directory, e.g. ELF/ or samples/PE/evil.exe)'
         required: false
+        default: 'samples/'
+
+permissions:
+  contents: write
 
 jobs:
   analyze:
     name: Submit & Report
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
+    timeout-minutes: 90
 
     steps:
+      # ─────────────────────────────────────────────────────────────────
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 2
           token: ${{ secrets.GH_PAT }}
 
+      # ─────────────────────────────────────────────────────────────────
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -31,30 +64,93 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install requests vt-py weasyprint jinja2 python-dateutil
+          pip install --quiet \
+            requests \
+            vt-py \
+            python-magic \
+            pyzipper \
+            py7zr \
+            rarfile \
+            weasyprint \
+            jinja2 \
+            python-dateutil
+          sudo apt-get install -qq -y p7zip-full libmagic1
 
-      - name: Find new samples
+      # ─────────────────────────────────────────────────────────────────
+      - name: Detect changed sample files
         id: find_samples
         run: |
-          # Get files added/modified in this push
-          git diff --name-only HEAD~1 HEAD -- 'samples/' > /tmp/changed_files.txt || \
-            find samples/ -type f ! -name '.gitkeep' > /tmp/changed_files.txt
-          echo "Changed files:"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TARGET="${{ github.event.inputs.sample_path }}"
+            if [ -f "$TARGET" ]; then
+              echo "$TARGET" > /tmp/changed_files.txt
+            else
+              find "$TARGET" -type f 2>/dev/null | grep -v '.gitkeep' > /tmp/changed_files.txt
+            fi
+          else
+            git diff --name-only HEAD~1 HEAD \
+              -- 'ELF/' 'Miori/' 'UNKWN/' 'samples/' \
+              | grep -v '/$' \
+              > /tmp/changed_files.txt || true
+          fi
+          echo "=== Changed files ==="
           cat /tmp/changed_files.txt
           echo "count=$(wc -l < /tmp/changed_files.txt)" >> $GITHUB_OUTPUT
 
-      - name: Run analysis pipeline
+      # ─────────────────────────────────────────────────────────────────
+      - name: Run multi-scanner analysis
+        if: steps.find_samples.outputs.count != '0'
         env:
-          VT_API_KEY: ${{ secrets.VT_API_KEY }}
-          JOESANDBOX_API_KEY: ${{ secrets.JOESANDBOX_API_KEY }}
-          GITHUB_REPO: ${{ github.repository }}
+          VT_API_KEY:              ${{ secrets.VT_API_KEY }}
+          MALWAREBAZAAR_API_KEY:   ${{ secrets.MALWAREBAZAAR_API_KEY }}
+          HYBRID_ANALYSIS_KEY:     ${{ secrets.HYBRID_ANALYSIS_KEY }}
+          MALSHARE_API_KEY:        ${{ secrets.MALSHARE_API_KEY }}
+          JOESANDBOX_API_KEY:      ${{ secrets.JOESANDBOX_API_KEY }}
+          METADEFENDER_API_KEY:    ${{ secrets.METADEFENDER_API_KEY }}
+          CAPE_API_URL:            ${{ secrets.CAPE_API_URL }}
+          CAPE_API_KEY:            ${{ secrets.CAPE_API_KEY }}
+          ANYRUN_API_KEY:          ${{ secrets.ANYRUN_API_KEY }}
+          GITHUB_REPO:             ${{ github.repository }}
         run: |
-          python3 .github/scripts/analyze_samples.py --file-list /tmp/changed_files.txt
+          python3 .github/scripts/analyze_samples.py \
+            --file-list /tmp/changed_files.txt \
+            --output-dir reports/scanner/ \
+            --ioc-dir iocs/ \
+            --archive-passwords infected,malware,infected123,virus \
+            --wait-results
 
+      # ─────────────────────────────────────────────────────────────────
       - name: Commit reports and IOC updates
+        if: steps.find_samples.outputs.count != '0'
         run: |
           git config user.name  "honeypot-bot"
           git config user.email "honeypot-bot@noreply.github.com"
           git add reports/ iocs/
-          git diff --cached --quiet || git commit -m "bot: add analysis reports [skip ci]"
+          git diff --cached --quiet \
+            || git commit -m "bot: scanner results $(date +%Y-%m-%d) [skip ci]"
           git push
+
+      # ─────────────────────────────────────────────────────────────────
+      - name: Job summary
+        if: steps.find_samples.outputs.count != '0'
+        run: |
+          echo '## 🔬 Scanner Results' >> $GITHUB_STEP_SUMMARY
+          echo '| SHA256 | File | VT Detections | Family |' >> $GITHUB_STEP_SUMMARY
+          echo '|--------|------|---------------|--------|' >> $GITHUB_STEP_SUMMARY
+          for f in reports/scanner/*.json 2>/dev/null; do
+            [ -f "$f" ] || continue
+            python3 - <<'EOF'
+import json, sys, os
+f = "$f"
+try:
+    d = json.load(open(f))
+    sha = d.get('sha256','?')[:16] + '...'
+    name = d.get('filename','?')
+    vt = d.get('results', {}).get('VirusTotalScanner', {})
+    pos = vt.get('positives', '?')
+    tot = vt.get('total', '?')
+    sig = d.get('results', {}).get('MalwareBazaarScanner', {}).get('signature', '-')
+    print(f"| {sha} | {name} | {pos}/{tot} | {sig} |")
+except: pass
+EOF
+          done >> $GITHUB_STEP_SUMMARY || true
