@@ -9,6 +9,14 @@
 #       c) Every scanner errored on every file (exit 2)
 #   - Deleted files are NEVER scanned (--diff-filter=ACMR)
 #   - Deletion-only pushes skip the entire job immediately.
+#
+# Sample layout:
+#   samples/ELF/       Linux/IoT ELF binaries
+#   samples/PE/        Windows PE executables
+#   samples/Scripts/   Dropper scripts
+#   samples/Docs/      Malicious documents
+#   samples/Miori/     Miori botnet samples
+#   samples/UNKWN/     Unclassified
 
 name: Malware Analysis Pipeline
 
@@ -16,14 +24,11 @@ on:
   push:
     branches: [main]
     paths:
-      - 'ELF/**'
-      - 'Miori/**'
-      - 'UNKWN/**'
       - 'samples/**'
   workflow_dispatch:
     inputs:
       sample_path:
-        description: 'File or directory to scan (e.g. ELF/ or samples/PE/evil.exe)'
+        description: 'File or directory to scan (e.g. samples/PE/evil.exe or samples/)'
         required: false
         default: 'samples/'
 
@@ -51,7 +56,7 @@ jobs:
         run: |
           set -euo pipefail
           ADDED=$(git diff --name-only --diff-filter=ACMR HEAD~1 HEAD \
-            -- 'ELF/' 'Miori/' 'UNKWN/' 'samples/' | wc -l)
+            -- 'samples/' | wc -l)
           if [ "$ADDED" -eq 0 ]; then
             echo "Push contains only deletions — skipping pipeline."
             exit 0
@@ -88,8 +93,9 @@ jobs:
             fi
           else
             git diff --name-only --diff-filter=ACMR HEAD~1 HEAD \
-              -- 'ELF/' 'Miori/' 'UNKWN/' 'samples/' \
+              -- 'samples/' \
               | grep -v '/$' \
+              | grep -v '\.gitkeep$' \
               > /tmp/changed_files.txt || true
           fi
 
@@ -146,7 +152,8 @@ jobs:
           GITHUB_RUN_ID: ${{ github.run_id }}
         run: |
           DATE=$(date +%Y-%m-%d)
-          PDF="reports/scan-report-${DATE}.pdf"
+          PDF="reports/pdf/scan-report-${DATE}.pdf"
+          mkdir -p reports/pdf
           python3 .github/scripts/report.py \
             --input-dir reports/scanner/ \
             --output    "$PDF"
@@ -157,7 +164,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: scan-report-${{ github.run_id }}
-          path: reports/scan-report-*.pdf
+          path: reports/pdf/scan-report-*.pdf
           retention-days: 90
           if-no-files-found: warn
 
