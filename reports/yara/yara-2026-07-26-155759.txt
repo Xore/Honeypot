@@ -1,0 +1,3 @@
+PE_Dropper_Generic samples/PE/dashboard.exe
+PE_Ransomware_Generic samples/PE/dashboard.exe
+Generic_Crypto_Operations samples/PE/dashboard.exe

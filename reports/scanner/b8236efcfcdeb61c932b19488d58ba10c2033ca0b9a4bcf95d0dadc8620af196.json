@@ -5,7 +5,7 @@
   "sha1": "4ba10e9acc18d2dd1d5acc72a681278c10145898",
   "md5": "e973b260c4613c14d285536e398f82cb",
   "size": 11124736,
-  "scanned_at": "2026-07-26T14:01:19Z",
+  "scanned_at": "2026-07-26T15:58:00Z",
   "results": {
     "VirusTotalScanner": {
       "source": "virustotal",
@@ -32,11 +32,12 @@
       "_ok": true
     },
     "MalwareBazaarScanner": {
-      "source": "MalwareBazaar",
-      "status": "failed",
-      "error": "Expecting value: line 1 column 1 (char 0)",
-      "traceback": "Traceback (most recent call last):\n  File \"/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/requests/models.py\", line 1116, in json\n    return complexjson.loads(self.text, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/json/__init__.py\", line 346, in loads\n    return _default_decoder.decode(s)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/json/decoder.py\", line 338, in decode\n    obj, end = self.raw_decode(s, idx=_w(s, 0).end())\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/json/decoder.py\", line 356, in raw_decode\n    raise JSONDecodeError(\"Expecting value\", s, err.value) from None\njson.decoder.JSONDecodeError: Expecting value: line 1 column 1 (char 0)\n\nDuring handling of the above exception, another exception occurred:\n\nTraceback (most recent call last):\n  File \"/home/runner/work/Honeypot/Honeypot/.github/scripts/analyze_samples.py\", line 202, in scan\n    return self._scan(path, hashes, wait=wait)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/runner/work/Honeypot/Honeypot/.github/scripts/analyze_samples.py\", line 387, in _scan\n    return self._upload(path)\n           ^^^^^^^^^^^^^^^^^^\n  File \"/home/runner/work/Honeypot/Honeypot/.github/scripts/analyze_samples.py\", line 370, in _upload\n    d   = r.json()\n          ^^^^^^^^\n  File \"/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/requests/models.py\", line 1120, in json\n    raise RequestsJSONDecodeError(e.msg, e.doc, e.pos)\nrequests.exceptions.JSONDecodeError: Expecting value: line 1 column 1 (char 0)\n",
-      "_ok": false
+      "source": "malwarebazaar",
+      "known": false,
+      "submitted": false,
+      "sha256": "",
+      "permalink": "https://bazaar.abuse.ch/sample//",
+      "_ok": true
     },
     "HybridAnalysisScanner": {
       "source": "HybridAnalysis",
@@ -46,13 +47,23 @@
     },
     "MetaDefenderScanner": {
       "source": "metadefender",
-      "known": false,
-      "data_id": "bzI2MDcyNm81ZDlUUFNNc2R1VGxKLVBaQ21G_mdaas",
-      "permalink": "https://metadefender.opswat.com/results/file/bzI2MDcyNm81ZDlUUFNNc2R1VGxKLVBaQ21G_mdaas/regular/overview",
-      "status": "completed",
+      "known": true,
       "positives": 0,
       "total": 20,
       "scan_result": "No Threat Detected",
+      "file_info": {
+        "file_size": 11124736,
+        "upload_timestamp": "2026-07-26T14:01:23.877Z",
+        "md5": "E973B260C4613C14D285536E398F82CB",
+        "sha1": "4BA10E9ACC18D2DD1D5ACC72A681278C10145898",
+        "sha256": "B8236EFCFCDEB61C932B19488D58BA10C2033CA0B9A4BCF95D0DADC8620AF196",
+        "file_type": "application/x-dosexec",
+        "file_type_category": "E",
+        "file_type_description": "Executable File",
+        "file_type_extension": "exe",
+        "display_name": "dashboard.exe"
+      },
+      "permalink": "https://metadefender.com/results/file/b8236efcfcdeb61c932b19488d58ba10c2033ca0b9a4bcf95d0dadc8620af196/overview",
       "_ok": true
     }
   }
