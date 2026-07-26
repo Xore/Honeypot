@@ -14,6 +14,8 @@
 #     samples/ was already scanned on the commit that Added it. Re-scanning on
 #     every structural commit (scaffolding, .gitkeep, workflow changes) would
 #     cause redundant uploads — the root cause of the dashboard.exe re-scan.
+#   - PRs trigger analysis but never commit results (dry-run mode).
+#   - Scheduled runs rescan all of samples/ with fresh API scores.
 #
 # Sample layout:
 #   samples/ELF/       Linux/IoT ELF binaries
@@ -22,6 +24,12 @@
 #   samples/Docs/      Malicious documents
 #   samples/Miori/     Miori botnet samples
 #   samples/UNKNOWN/   Unclassified
+#
+# Action SHA pins (update periodically):
+#   actions/checkout        v4  → 11bd71901bbe5b1630ceea73d27597364c9af683
+#   actions/setup-python    v5  → a26ac4c92c1d8fa03d7a686e25b16bb2af22d7c4
+#   actions/cache           v4  → 5a3ec84eff668545956fd18022155c47e93e2684
+#   actions/upload-artifact v4  → ea165f8d65b6e75b540449e92b4886f43607fa02
 
 name: Malware Analysis Pipeline
 
@@ -30,6 +38,13 @@ on:
     branches: [main]
     paths:
       - 'samples/**'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'samples/**'
+  schedule:
+    # Weekly rescan every Sunday at 02:00 UTC — catches improved detections
+    - cron: '0 2 * * 0'
   workflow_dispatch:
     inputs:
       sample_path:
@@ -37,8 +52,9 @@ on:
         required: false
         default: 'samples/'
 
+# Minimal top-level permissions; write granted only at job level where needed
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   analyze:
@@ -46,11 +62,17 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
 
+    # Grant write only to this job (not the whole workflow)
+    permissions:
+      contents: write
+
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        # actions/checkout v4 — pinned SHA
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
-          fetch-depth: 2
+          # fetch-depth 0 for scheduled full rescan; 2 for push/PR diffs
+          fetch-depth: ${{ github.event_name == 'schedule' && '0' || '2' }}
           token: ${{ secrets.GH_PAT }}
 
       - name: Skip if no new sample files
@@ -59,11 +81,14 @@ jobs:
         # structural commits (scaffolding, .gitkeep, workflow edits) touch the
         # samples/ path filter without actually adding new malware samples.
         # --diff-filter=AR: A=Added, R=Renamed only (excludes Modified/Copied/Deleted)
-        if: github.event_name != 'workflow_dispatch'
+        # Fallback: on force-push or first commit, diff HEAD~1 may fail — list all samples.
+        if: github.event_name != 'workflow_dispatch' && github.event_name != 'schedule'
         run: |
           set -euo pipefail
           ADDED=$(git diff --name-only --diff-filter=AR HEAD~1 HEAD \
-            -- 'samples/' | grep -v '\.gitkeep$' | wc -l)
+            -- 'samples/' 2>/dev/null \
+            | grep -v '\.gitkeep$' | wc -l \
+            || git ls-files samples/ | grep -v '\.gitkeep$' | wc -l)
           if [ "$ADDED" -eq 0 ]; then
             echo "No new sample files in this push — skipping pipeline."
             exit 0
@@ -71,20 +96,36 @@ jobs:
           echo "$ADDED new sample file(s) detected — continuing."
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        # actions/setup-python v5 — pinned SHA
+        uses: actions/setup-python@a26ac4c92c1d8fa03d7a686e25b16bb2af22d7c4
         with:
           python-version: '3.12'
+
+      - name: Cache pip dependencies
+        # actions/cache v4 — pinned SHA
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements*.txt') }}-v1
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Cache apt packages
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684
+        with:
+          path: /var/cache/apt/archives
+          key: ${{ runner.os }}-apt-honeypot-v1
 
       - name: Install dependencies
         run: |
           set -euo pipefail
           pip install --quiet \
             requests vt-py python-magic pyzipper py7zr rarfile \
-            weasyprint jinja2 python-dateutil
+            weasyprint jinja2 python-dateutil yara-python
           sudo apt-get install -qq -y \
             p7zip-full libmagic1 \
             libpango-1.0-0 libpangoft2-1.0-0 libharfbuzz0b \
-            fonts-dejavu-core
+            fonts-dejavu-core yara
 
       - name: Detect changed sample files
         id: find_samples
@@ -98,13 +139,18 @@ jobs:
               find "$TARGET" -type f 2>/dev/null \
                 | grep -v '\.gitkeep$' > /tmp/changed_files.txt || true
             fi
+          elif [ "${{ github.event_name }}" = "schedule" ]; then
+            # Full rescan on scheduled runs
+            find samples/ -type f | grep -v '\.gitkeep$' > /tmp/changed_files.txt || true
           else
             # AR only: Added + Renamed — never re-scan pre-existing files
+            # Fallback to full list if HEAD~1 doesn't exist (force-push / first commit)
             git diff --name-only --diff-filter=AR HEAD~1 HEAD \
               -- 'samples/' \
               | grep -v '/$' \
               | grep -v '\.gitkeep$' \
-              > /tmp/changed_files.txt || true
+              > /tmp/changed_files.txt 2>/dev/null \
+              || find samples/ -type f | grep -v '\.gitkeep$' > /tmp/changed_files.txt || true
           fi
 
           if [ -f /tmp/changed_files.txt ]; then
@@ -118,6 +164,32 @@ jobs:
           cat /tmp/changed_files.txt || true
           COUNT=$(wc -l < /tmp/changed_files.txt || echo 0)
           echo "count=$COUNT" >> "$GITHUB_OUTPUT"
+
+      - name: YARA local pre-scan
+        # Offline detection using local YARA rules before consuming API quota.
+        # Rules live in yara-rules/. Missing rules dir is a soft skip, not a failure.
+        id: yara
+        if: steps.find_samples.outputs.count != '0'
+        run: |
+          set -euo pipefail
+          YARA_HITS=0
+          if [ ! -d "yara-rules" ] || [ -z "$(ls yara-rules/*.yar yara-rules/*.yara 2>/dev/null)" ]; then
+            echo "No YARA rules found in yara-rules/ — skipping local scan."
+            echo "yara_hits=0" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          mkdir -p reports/yara
+          REPORT="reports/yara/yara-$(date +%Y-%m-%d-%H%M%S).txt"
+          while IFS= read -r sample; do
+            [ -f "$sample" ] || continue
+            yara --recursive yara-rules/ "$sample" 2>/dev/null >> "$REPORT" || true
+          done < /tmp/changed_files.txt
+          YARA_HITS=$(grep -c '.' "$REPORT" 2>/dev/null || echo 0)
+          echo "YARA hits: $YARA_HITS"
+          echo "yara_hits=$YARA_HITS" >> "$GITHUB_OUTPUT"
+          if [ "$YARA_HITS" -gt 0 ]; then
+            echo "::warning::YARA matched $YARA_HITS rule(s) — see reports/yara/ for details."
+          fi
 
       - name: Run multi-scanner analysis
         id: scanner
@@ -152,6 +224,20 @@ jobs:
           fi
           exit 0
 
+      - name: Update IOC changelog
+        # Append a dated entry to iocs/CHANGELOG.md with counts of new IOCs.
+        if: steps.find_samples.outputs.count != '0'
+        run: |
+          set -euo pipefail
+          mkdir -p iocs
+          CHANGELOG="iocs/CHANGELOG.md"
+          [ -f "$CHANGELOG" ] || echo "# IOC Changelog" > "$CHANGELOG"
+          DATE=$(date +%Y-%m-%d)
+          NEW_IOCS=$(find iocs/ -name '*.txt' -newer "$CHANGELOG" 2>/dev/null | wc -l || echo 0)
+          printf "\n## %s\n- New IOC files: %s\n- Triggered by: %s (%s)\n" \
+            "$DATE" "$NEW_IOCS" "${{ github.event_name }}" "${{ github.sha }}" \
+            >> "$CHANGELOG"
+
       - name: Generate PDF report
         id: pdf
         if: always() && steps.find_samples.outputs.count != '0'
@@ -169,7 +255,8 @@ jobs:
 
       - name: Upload PDF as artifact
         if: always() && steps.find_samples.outputs.count != '0'
-        uses: actions/upload-artifact@v4
+        # actions/upload-artifact v4 — pinned SHA
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: scan-report-${{ github.run_id }}
           path: reports/pdf/scan-report-*.pdf
@@ -177,7 +264,8 @@ jobs:
           if-no-files-found: warn
 
       - name: Commit reports and IOC updates
-        if: always() && steps.find_samples.outputs.count != '0'
+        # Skip commit on PRs (dry-run mode) and schedule triggers commit normally
+        if: always() && steps.find_samples.outputs.count != '0' && github.event_name != 'pull_request'
         run: |
           git config user.name  "honeypot-bot"
           git config user.email "honeypot-bot@noreply.github.com"
@@ -190,5 +278,17 @@ jobs:
           fi
 
       - name: Job summary
-        if: always() && steps.find_samples.outputs.count != '0'
-        run: python3 .github/scripts/summary.py reports/scanner/ >> "$GITHUB_STEP_SUMMARY"
+        # Always emit a summary — even when no samples were found
+        if: always()
+        run: |
+          if [ "${{ steps.find_samples.outputs.count }}" = "0" ] || [ -z "${{ steps.find_samples.outputs.count }}" ]; then
+            echo "## Malware Analysis Pipeline" >> "$GITHUB_STEP_SUMMARY"
+            echo "ℹ️ No new sample files detected in this run." >> "$GITHUB_STEP_SUMMARY"
+            echo "- Trigger: \`${{ github.event_name }}\`" >> "$GITHUB_STEP_SUMMARY"
+            echo "- Commit: \`${{ github.sha }}\`" >> "$GITHUB_STEP_SUMMARY"
+          else
+            python3 .github/scripts/summary.py reports/scanner/ >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "### YARA Pre-Scan" >> "$GITHUB_STEP_SUMMARY"
+            echo "- Local rule hits: \`${{ steps.yara.outputs.yara_hits }}\`" >> "$GITHUB_STEP_SUMMARY"
+          fi
