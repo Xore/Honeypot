@@ -5,7 +5,7 @@
   "sha1": "4ba10e9acc18d2dd1d5acc72a681278c10145898",
   "md5": "e973b260c4613c14d285536e398f82cb",
   "size": 11124736,
-  "scanned_at": "2026-07-26T13:53:38Z",
+  "scanned_at": "2026-07-26T14:01:19Z",
   "results": {
     "VirusTotalScanner": {
       "source": "virustotal",
@@ -34,8 +34,8 @@
     "MalwareBazaarScanner": {
       "source": "MalwareBazaar",
       "status": "failed",
-      "error": "401 Client Error: Unauthorized for url: https://mb-api.abuse.ch/api/v1/",
-      "traceback": "Traceback (most recent call last):\n  File \"/home/runner/work/Honeypot/Honeypot/.github/scripts/analyze_samples.py\", line 182, in scan\n    return self._scan(path, hashes, wait=wait)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/runner/work/Honeypot/Honeypot/.github/scripts/analyze_samples.py\", line 339, in _scan\n    result = self._lookup(hashes['sha256'])\n             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/runner/work/Honeypot/Honeypot/.github/scripts/analyze_samples.py\", line 305, in _lookup\n    r.raise_for_status()\n  File \"/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/requests/models.py\", line 1167, in raise_for_status\n    raise HTTPError(http_error_msg, response=self)\nrequests.exceptions.HTTPError: 401 Client Error: Unauthorized for url: https://mb-api.abuse.ch/api/v1/\n",
+      "error": "Expecting value: line 1 column 1 (char 0)",
+      "traceback": "Traceback (most recent call last):\n  File \"/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/requests/models.py\", line 1116, in json\n    return complexjson.loads(self.text, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/json/__init__.py\", line 346, in loads\n    return _default_decoder.decode(s)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/json/decoder.py\", line 338, in decode\n    obj, end = self.raw_decode(s, idx=_w(s, 0).end())\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/json/decoder.py\", line 356, in raw_decode\n    raise JSONDecodeError(\"Expecting value\", s, err.value) from None\njson.decoder.JSONDecodeError: Expecting value: line 1 column 1 (char 0)\n\nDuring handling of the above exception, another exception occurred:\n\nTraceback (most recent call last):\n  File \"/home/runner/work/Honeypot/Honeypot/.github/scripts/analyze_samples.py\", line 202, in scan\n    return self._scan(path, hashes, wait=wait)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/runner/work/Honeypot/Honeypot/.github/scripts/analyze_samples.py\", line 387, in _scan\n    return self._upload(path)\n           ^^^^^^^^^^^^^^^^^^\n  File \"/home/runner/work/Honeypot/Honeypot/.github/scripts/analyze_samples.py\", line 370, in _upload\n    d   = r.json()\n          ^^^^^^^^\n  File \"/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/requests/models.py\", line 1120, in json\n    raise RequestsJSONDecodeError(e.msg, e.doc, e.pos)\nrequests.exceptions.JSONDecodeError: Expecting value: line 1 column 1 (char 0)\n",
       "_ok": false
     },
     "HybridAnalysisScanner": {
@@ -45,11 +45,15 @@
       "_ok": false
     },
     "MetaDefenderScanner": {
-      "source": "MetaDefender",
-      "status": "failed",
-      "error": "HTTPSConnectionPool(host='api.metadefender.com', port=443): Max retries exceeded with url: /v4/file (Caused by SSLError(SSLEOFError(8, 'EOF occurred in violation of protocol (_ssl.c:2427)')))",
-      "traceback": "urllib3.exceptions.SSLError: EOF occurred in violation of protocol (_ssl.c:2427)\n\nThe above exception was the direct cause of the following exception:\n\nTraceback (most recent call last):\n  File \"/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/requests/adapters.py\", line 696, in send\n    resp = conn.urlopen(\n           ^^^^^^^^^^^^^\n  File \"/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/urllib3/connectionpool.py\", line 842, in urlopen\n    retries = retries.increment(\n              ^^^^^^^^^^^^^^^^^^\n  File \"/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/urllib3/util/retry.py\", line 543, in increment\n    raise MaxRetryError(_pool, url, reason) from reason  # type: ignore[arg-type]\n    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nurllib3.exceptions.MaxRetryError: HTTPSConnectionPool(host='api.metadefender.com', port=443): Max retries exceeded with url: /v4/file (Caused by SSLError(SSLEOFError(8, 'EOF occurred in violation of protocol (_ssl.c:2427)')))\n\nDuring handling of the above exception, another exception occurred:\n\nTraceback (most recent call last):\n  File \"/home/runner/work/Honeypot/Honeypot/.github/scripts/analyze_samples.py\", line 182, in scan\n    return self._scan(path, hashes, wait=wait)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/runner/work/Honeypot/Honeypot/.github/scripts/analyze_samples.py\", line 602, in _scan\n    upload = self._upload(path)\n             ^^^^^^^^^^^^^^^^^^\n  File \"/home/runner/work/Honeypot/Honeypot/.github/scripts/analyze_samples.py\", line 563, in _upload\n    r = requests.post(f'{self.BASE}/file',\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/requests/api.py\", line 134, in post\n    return request(\"post\", url, data=data, json=json, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/requests/api.py\", line 71, in request\n    return session.request(method=method, url=url, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nrequests.exceptions.SSLError: HTTPSConnectionPool(host='api.metadefender.com', port=443): Max retries exceeded with url: /v4/file (Caused by SSLError(SSLEOFError(8, 'EOF occurred in violation of protocol (_ssl.c:2427)')))\n",
-      "_ok": false
+      "source": "metadefender",
+      "known": false,
+      "data_id": "bzI2MDcyNm81ZDlUUFNNc2R1VGxKLVBaQ21G_mdaas",
+      "permalink": "https://metadefender.opswat.com/results/file/bzI2MDcyNm81ZDlUUFNNc2R1VGxKLVBaQ21G_mdaas/regular/overview",
+      "status": "completed",
+      "positives": 0,
+      "total": 20,
+      "scan_result": "No Threat Detected",
+      "_ok": true
     }
   }
 }
