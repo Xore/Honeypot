@@ -1,0 +1,2 @@
+# C2 and dropper URLs observed by honeypot-stack
+# Format: url,first_seen,type (c2|dropper|payload)

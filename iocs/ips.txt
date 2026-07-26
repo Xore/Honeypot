@@ -1,0 +1,2 @@
+# Attacker IPs observed by honeypot-stack
+# Format: IP,first_seen,last_seen,country,tags
