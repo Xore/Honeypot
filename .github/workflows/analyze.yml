@@ -56,7 +56,10 @@ jobs:
           pip install --quiet \
             requests vt-py python-magic pyzipper py7zr rarfile \
             weasyprint jinja2 python-dateutil
-          sudo apt-get install -qq -y p7zip-full libmagic1
+          sudo apt-get install -qq -y \
+            p7zip-full libmagic1 \
+            libpango-1.0-0 libpangoft2-1.0-0 libharfbuzz0b \
+            fonts-dejavu-core
 
       - name: Detect changed sample files
         id: find_samples
@@ -71,16 +74,12 @@ jobs:
                 | grep -v '\.gitkeep$' > /tmp/changed_files.txt || true
             fi
           else
-            # --diff-filter=ACMR  =>  Added, Copied, Modified, Renamed only
-            # Deleted (D) and any other status are excluded — never scan removed files
             git diff --name-only --diff-filter=ACMR HEAD~1 HEAD \
               -- 'ELF/' 'Miori/' 'UNKWN/' 'samples/' \
               | grep -v '/$' \
               > /tmp/changed_files.txt || true
           fi
 
-          # Remove any listed path that no longer exists on disk
-          # (safety net for renames / force-pushes)
           if [ -f /tmp/changed_files.txt ]; then
             while IFS= read -r line; do
               [ -f "$line" ] && echo "$line"
@@ -125,6 +124,29 @@ jobs:
             exit 2
           fi
           exit 0
+
+      - name: Generate PDF report
+        if: always() && steps.find_samples.outputs.count != '0'
+        env:
+          GITHUB_REPO:   ${{ github.repository }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+        run: |
+          DATE=$(date +%Y-%m-%d)
+          PDF="reports/scan-report-${DATE}.pdf"
+          python3 .github/scripts/report.py \
+            --input-dir reports/scanner/ \
+            --output    "$PDF"
+          echo "pdf_path=$PDF" >> "$GITHUB_OUTPUT"
+        id: pdf
+
+      - name: Upload PDF as artifact
+        if: always() && steps.find_samples.outputs.count != '0'
+        uses: actions/upload-artifact@v4
+        with:
+          name: scan-report-${{ github.run_id }}
+          path: reports/scan-report-*.pdf
+          retention-days: 90
+          if-no-files-found: warn
 
       - name: Commit reports and IOC updates
         if: always() && steps.find_samples.outputs.count != '0'
