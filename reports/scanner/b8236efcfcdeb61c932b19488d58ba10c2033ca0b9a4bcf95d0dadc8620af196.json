@@ -5,7 +5,7 @@
   "sha1": "4ba10e9acc18d2dd1d5acc72a681278c10145898",
   "md5": "e973b260c4613c14d285536e398f82cb",
   "size": 11124736,
-  "scanned_at": "2026-07-26T16:08:47Z",
+  "scanned_at": "2026-07-26T16:22:34Z",
   "results": {
     "VirusTotalScanner": {
       "source": "virustotal",
@@ -45,8 +45,7 @@
     "HybridAnalysisScanner": {
       "source": "HybridAnalysis",
       "status": "failed",
-      "error": "0",
-      "traceback": "Traceback (most recent call last):\n  File \"/home/runner/work/Honeypot/Honeypot/.github/scripts/analyze_samples.py\", line 219, in scan\n    return self._scan(path, hashes, wait=wait)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/runner/work/Honeypot/Honeypot/.github/scripts/analyze_samples.py\", line 524, in _scan\n    result = self._lookup(hashes['sha256'])\n             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/runner/work/Honeypot/Honeypot/.github/scripts/analyze_samples.py\", line 485, in _lookup\n    t = data[0]\n        ~~~~^^^\nKeyError: 0\n",
+      "error": "submit HTTP 404: {\"message\":\"Requested URI - Not Found\"}",
       "_ok": false
     },
     "MetaDefenderScanner": {
@@ -67,7 +66,8 @@
         "file_type_extension": "exe",
         "display_name": "dashboard.exe"
       },
-      "permalink": "https://metadefender.com/results/file/b8236efcfcdeb61c932b19488d58ba10c2033ca0b9a4bcf95d0dadc8620af196/overview",
+      "data_id": "bzI2MDcyNm81ZDlUUFNNc2R1VGxKLVBaQ21G_mdaas",
+      "permalink": "https://metadefender.com/results/file/bzI2MDcyNm81ZDlUUFNNc2R1VGxKLVBaQ21G_mdaas/threats-prevented",
       "_ok": true
     }
   }
