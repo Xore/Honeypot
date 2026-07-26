@@ -420,13 +420,12 @@ class MalwareBazaarScanner(BaseScanner):
                 'permalink': f'https://bazaar.abuse.ch/sample/{sha}/',
             }
         if status == 'file_already_known':
-            sha = d.get('data', {}).get('sha256_hash', path.name)
             log.info(f'  MalwareBazaar: file already known')
             return {
                 'source': 'malwarebazaar', 'known': True,
                 'submitted': False,
                 'note': 'file_already_known',
-                'permalink': f'https://bazaar.abuse.ch/browse/',
+                'permalink': 'https://bazaar.abuse.ch/browse/',
             }
         # Any other status (no_api_key, user_blacklisted, file_expected, etc.)
         return _err(self.NAME, f'upload query_status={status}: {json.dumps(d)[:200]}')
@@ -444,14 +443,19 @@ class MalwareBazaarScanner(BaseScanner):
 
 # ── Scanner 3: Hybrid-Analysis ───────────────────────────────────────────────
 #
-# FIX (2026-07-a): environment_id=120 (Windows 7 64-bit) was retired → 160.
-# FIX (2026-07-b): environment_id=160 is a paid enterprise environment and
-#   returns HTTP 404 on the public/free API tier.
-#   Valid free-tier environments:
-#     100 = Windows 7 32-bit
-#     110 = Windows 7 64-bit  ← default (broadest malware compatibility)
-#     200 = Android
-#     300 = Linux (Ubuntu 16.04, 64-bit)
+# FIX (2026-07-c): `allow_community_access` was removed from /submit/file in
+#   API v2 changelog — sending it causes HTTP 404 "Requested URI - Not Found".
+#   Removed from _submit() data payload.
+#
+# Current environment IDs per API v2.31.0 docs:
+#   100 = Windows 7 32-bit
+#   110 = Windows 7 32-bit (HWP Support)
+#   120 = Windows 7 64-bit  ← default
+#   140 = Windows 11 64-bit
+#   160 = Windows 10 64-bit
+#   200 = Android Static Analysis
+#   310 = Linux (Ubuntu 20.04, 64-bit)
+#   400 = Mac Catalina 64-bit (x86)
 
 class HybridAnalysisScanner(BaseScanner):
     NAME = 'HybridAnalysis'
@@ -489,28 +493,31 @@ class HybridAnalysisScanner(BaseScanner):
             'permalink':    f'https://www.hybrid-analysis.com/sample/{sha256}',
         }
 
-    def _submit(self, path, env_id=110):
-        # env_id 110 = Windows 7 64-bit (free public API tier)
-        # 100=Win7-32, 110=Win7-64, 200=Android, 300=Linux
-        # 160 (Win10-64) requires a paid enterprise subscription → 404 on free tier
+    def _submit(self, path, env_id=120):
+        # env_id 120 = Windows 7 64-bit (default, broadest malware compatibility)
+        # NOTE: `allow_community_access` was removed from the API and must NOT
+        # be sent — it causes HTTP 404 "Requested URI - Not Found".
         with open(path, 'rb') as fh:
             r = requests.post(
                 f'{self.BASE}/submit/file',
                 headers=self.hdrs,
                 data={
-                    'environment_id':         env_id,
-                    'allow_community_access': True,
-                    'comment':                'honeypot-xore automated',
+                    'environment_id': env_id,
+                    'comment':        'honeypot-xore automated',
                 },
                 files={'file': (path.name, fh)},
-                timeout=120)
+                timeout=120,
+            )
         if r.status_code not in (200, 201):
             return _err(self.NAME, f'submit HTTP {r.status_code}: {r.text[:120]}')
         d = r.json()
+        sha = d.get('sha256', '')
+        log.info(f'  HybridAnalysis: submitted → job_id={d.get("job_id")} sha256={sha}')
         return {
             'source': 'hybrid_analysis', 'known': False,
-            'job_id': d.get('job_id'), 'sha256': d.get('sha256'),
-            'permalink': f'https://www.hybrid-analysis.com/sample/{d.get("sha256","")}',
+            'job_id':    d.get('job_id'),
+            'sha256':    sha,
+            'permalink': f'https://www.hybrid-analysis.com/sample/{sha}',
         }
 
     def _scan(self, path, hashes, **_):
