@@ -195,15 +195,21 @@ def extract_archive(path: Path, passwords: list, tmpdir: Path) -> list:
     return []
 
 
-def expand_file(path: Path, passwords: list, tmpdir: Path) -> list:
+def expand_file(path: Path, passwords: list, tmpdir: Path, _top: bool = True) -> list:
     if path.suffix.lower() in ARCHIVE_EXTS:
         extracted = extract_archive(path, passwords, tmpdir)
         if extracted:
             results = []
             for f in extracted:
-                results.extend(expand_file(f, passwords, tmpdir))
+                results.extend(expand_file(f, passwords, tmpdir, _top=False))
             return results
-    if is_scannable(path):
+    # is_scannable() is a magic-byte/binary-ness heuristic meant to filter
+    # junk pulled out of an archive alongside the real payload (READMEs,
+    # license files, etc). It falsely rejects plain-text dropper scripts
+    # (samples/Scripts/) since those look like ordinary text, not binary.
+    # Top-level files were deliberately committed as samples, so always
+    # scan them regardless of the heuristic; only apply it to archive members.
+    if _top or is_scannable(path):
         return [path]
     log.debug(f'  Skipping non-scannable: {path.name}')
     return []
