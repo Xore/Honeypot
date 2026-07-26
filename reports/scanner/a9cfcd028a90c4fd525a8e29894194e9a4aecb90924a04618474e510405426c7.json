@@ -1,0 +1,62 @@
+{
+  "file": "samples/Scripts/a9cfcd028a90c4fd525a8e29894194e9a4aecb90924a04618474e510405426c7.malware.bin",
+  "filename": "a9cfcd028a90c4fd525a8e29894194e9a4aecb90924a04618474e510405426c7.malware.bin",
+  "sha256": "a9cfcd028a90c4fd525a8e29894194e9a4aecb90924a04618474e510405426c7",
+  "sha1": "9ca9040f6138c73fe487b707f55447c4e0fc8973",
+  "md5": "cbfcfcda250ce018c4355223365c0e01",
+  "size": 256,
+  "scanned_at": "2026-07-26T18:06:10Z",
+  "results": {
+    "VirusTotalScanner": {
+      "source": "virustotal",
+      "known": true,
+      "positives": 0,
+      "suspicious": 0,
+      "total": 74,
+      "stats": {
+        "malicious": 0,
+        "suspicious": 0,
+        "undetected": 60,
+        "harmless": 0,
+        "timeout": 0,
+        "confirmed-timeout": 0,
+        "failure": 1,
+        "type-unsupported": 13
+      },
+      "names": [
+        "a9cfcd028a90c4fd525a8e29894194e9a4aecb90924a04618474e510405426c7.malware.bin"
+      ],
+      "type_description": "Text",
+      "permalink": "https://www.virustotal.com/gui/file/a9cfcd028a90c4fd525a8e29894194e9a4aecb90924a04618474e510405426c7",
+      "_ok": true
+    },
+    "MalwareBazaarScanner": {
+      "source": "malwarebazaar",
+      "known": false,
+      "submitted": true,
+      "sha256": "",
+      "permalink": "https://bazaar.abuse.ch/sample//",
+      "_ok": true
+    },
+    "HybridAnalysisScanner": {
+      "source": "hybrid_analysis",
+      "known": false,
+      "job_id": "6a664c95563417d37c0a5cea",
+      "permalink": "https://www.hybrid-analysis.com/sample/a9cfcd028a90c4fd525a8e29894194e9a4aecb90924a04618474e510405426c7",
+      "status": "failed",
+      "error": "sandbox analysis errored",
+      "_ok": false
+    },
+    "MetaDefenderScanner": {
+      "source": "metadefender",
+      "known": false,
+      "data_id": "bzI2MDcyNjViMVowMldjbGZRazNQaDU1VURT_mdaas",
+      "permalink": "https://metadefender.com/results/file/bzI2MDcyNjViMVowMldjbGZRazNQaDU1VURT_mdaas/threats-prevented",
+      "status": "completed",
+      "positives": 0,
+      "total": 21,
+      "scan_result": "No Threat Detected",
+      "_ok": true
+    }
+  }
+}
