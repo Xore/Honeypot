@@ -1,0 +1,55 @@
+{
+  "file": "samples/PE/dashboard.exe",
+  "filename": "dashboard.exe",
+  "sha256": "b8236efcfcdeb61c932b19488d58ba10c2033ca0b9a4bcf95d0dadc8620af196",
+  "sha1": "4ba10e9acc18d2dd1d5acc72a681278c10145898",
+  "md5": "e973b260c4613c14d285536e398f82cb",
+  "size": 11124736,
+  "scanned_at": "2026-07-26T13:53:38Z",
+  "results": {
+    "VirusTotalScanner": {
+      "source": "virustotal",
+      "known": true,
+      "positives": 2,
+      "suspicious": 0,
+      "total": 74,
+      "stats": {
+        "malicious": 2,
+        "suspicious": 0,
+        "undetected": 67,
+        "harmless": 0,
+        "timeout": 0,
+        "confirmed-timeout": 0,
+        "failure": 1,
+        "type-unsupported": 4
+      },
+      "names": [
+        "cw6hi673.exe",
+        "dashboard.exe"
+      ],
+      "type_description": "Win32 EXE",
+      "permalink": "https://www.virustotal.com/gui/file/b8236efcfcdeb61c932b19488d58ba10c2033ca0b9a4bcf95d0dadc8620af196",
+      "_ok": true
+    },
+    "MalwareBazaarScanner": {
+      "source": "MalwareBazaar",
+      "status": "failed",
+      "error": "401 Client Error: Unauthorized for url: https://mb-api.abuse.ch/api/v1/",
+      "traceback": "Traceback (most recent call last):\n  File \"/home/runner/work/Honeypot/Honeypot/.github/scripts/analyze_samples.py\", line 182, in scan\n    return self._scan(path, hashes, wait=wait)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/runner/work/Honeypot/Honeypot/.github/scripts/analyze_samples.py\", line 339, in _scan\n    result = self._lookup(hashes['sha256'])\n             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/runner/work/Honeypot/Honeypot/.github/scripts/analyze_samples.py\", line 305, in _lookup\n    r.raise_for_status()\n  File \"/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/requests/models.py\", line 1167, in raise_for_status\n    raise HTTPError(http_error_msg, response=self)\nrequests.exceptions.HTTPError: 401 Client Error: Unauthorized for url: https://mb-api.abuse.ch/api/v1/\n",
+      "_ok": false
+    },
+    "HybridAnalysisScanner": {
+      "source": "HybridAnalysis",
+      "status": "failed",
+      "error": "submit HTTP 404: {\"message\":\"Requested URI - Not Found\"}",
+      "_ok": false
+    },
+    "MetaDefenderScanner": {
+      "source": "MetaDefender",
+      "status": "failed",
+      "error": "HTTPSConnectionPool(host='api.metadefender.com', port=443): Max retries exceeded with url: /v4/file (Caused by SSLError(SSLEOFError(8, 'EOF occurred in violation of protocol (_ssl.c:2427)')))",
+      "traceback": "urllib3.exceptions.SSLError: EOF occurred in violation of protocol (_ssl.c:2427)\n\nThe above exception was the direct cause of the following exception:\n\nTraceback (most recent call last):\n  File \"/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/requests/adapters.py\", line 696, in send\n    resp = conn.urlopen(\n           ^^^^^^^^^^^^^\n  File \"/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/urllib3/connectionpool.py\", line 842, in urlopen\n    retries = retries.increment(\n              ^^^^^^^^^^^^^^^^^^\n  File \"/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/urllib3/util/retry.py\", line 543, in increment\n    raise MaxRetryError(_pool, url, reason) from reason  # type: ignore[arg-type]\n    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nurllib3.exceptions.MaxRetryError: HTTPSConnectionPool(host='api.metadefender.com', port=443): Max retries exceeded with url: /v4/file (Caused by SSLError(SSLEOFError(8, 'EOF occurred in violation of protocol (_ssl.c:2427)')))\n\nDuring handling of the above exception, another exception occurred:\n\nTraceback (most recent call last):\n  File \"/home/runner/work/Honeypot/Honeypot/.github/scripts/analyze_samples.py\", line 182, in scan\n    return self._scan(path, hashes, wait=wait)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/runner/work/Honeypot/Honeypot/.github/scripts/analyze_samples.py\", line 602, in _scan\n    upload = self._upload(path)\n             ^^^^^^^^^^^^^^^^^^\n  File \"/home/runner/work/Honeypot/Honeypot/.github/scripts/analyze_samples.py\", line 563, in _upload\n    r = requests.post(f'{self.BASE}/file',\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/requests/api.py\", line 134, in post\n    return request(\"post\", url, data=data, json=json, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/requests/api.py\", line 71, in request\n    return session.request(method=method, url=url, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nrequests.exceptions.SSLError: HTTPSConnectionPool(host='api.metadefender.com', port=443): Max retries exceeded with url: /v4/file (Caused by SSLError(SSLEOFError(8, 'EOF occurred in violation of protocol (_ssl.c:2427)')))\n",
+      "_ok": false
+    }
+  }
+}
