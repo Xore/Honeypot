@@ -1,0 +1,2 @@
+Generic_Base64_Shellcode samples/PE/ChatGPT Installer.exe
+AutoGen_Unknown_3652b0a2 samples/PE/ChatGPT Installer.exe

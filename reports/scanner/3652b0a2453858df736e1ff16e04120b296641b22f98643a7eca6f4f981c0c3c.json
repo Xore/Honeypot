@@ -5,15 +5,13 @@
   "sha1": "250383900a72c566db302b84c3eea556dee150b2",
   "md5": "7be799cd97f424c820b4efd5b6bd4a2f",
   "size": 1438752,
-  "scanned_at": "2026-07-29T18:16:14Z",
+  "scanned_at": "2026-07-29T18:23:47Z",
   "results": {
     "VirusTotalScanner": {
       "source": "virustotal",
-      "known": false,
-      "analysis_id": "N2JlNzk5Y2Q5N2Y0MjRjODIwYjRlZmQ1YjZiZDRhMmY6MTc4NTM0ODk5MQ==",
-      "permalink": "https://www.virustotal.com/gui/file-analysis/N2JlNzk5Y2Q5N2Y0MjRjODIwYjRlZmQ1YjZiZDRhMmY6MTc4NTM0ODk5MQ==",
-      "status": "completed",
+      "known": true,
       "positives": 0,
+      "suspicious": 0,
       "total": 74,
       "stats": {
         "malicious": 0,
@@ -25,14 +23,29 @@
         "failure": 1,
         "type-unsupported": 4
       },
+      "names": [
+        "ng67k0.exe",
+        "ChatGPT Installer.exe",
+        "StoreInstaller.exe"
+      ],
+      "type_description": "Win32 EXE",
+      "permalink": "https://www.virustotal.com/gui/file/3652b0a2453858df736e1ff16e04120b296641b22f98643a7eca6f4f981c0c3c",
       "_ok": true
     },
     "MalwareBazaarScanner": {
       "source": "malwarebazaar",
-      "known": false,
-      "submitted": true,
-      "sha256": "",
-      "permalink": "https://bazaar.abuse.ch/sample//",
+      "known": true,
+      "signature": null,
+      "file_type": "exe",
+      "tags": [
+        "exe",
+        "honeypot",
+        "honeypot-xore",
+        "signed"
+      ],
+      "first_seen": "2026-07-29 18:17:20",
+      "reporter": "Xoreyo",
+      "permalink": "https://bazaar.abuse.ch/sample/3652b0a2453858df736e1ff16e04120b296641b22f98643a7eca6f4f981c0c3c/",
       "_ok": true
     },
     "HybridAnalysisScanner": {
@@ -49,13 +62,24 @@
     },
     "MetaDefenderScanner": {
       "source": "metadefender",
-      "known": false,
-      "data_id": "bzI2MDcyOW9SU2lZbVFNMmE4cVl3enFzMVds_mdaas",
-      "permalink": "https://metadefender.com/results/file/bzI2MDcyOW9SU2lZbVFNMmE4cVl3enFzMVds_mdaas/threats-prevented",
-      "status": "completed",
+      "known": true,
       "positives": 0,
       "total": 22,
       "scan_result": "No Threat Detected",
+      "file_info": {
+        "file_size": 1438752,
+        "upload_timestamp": "2026-07-29T18:19:24.211Z",
+        "md5": "7BE799CD97F424C820B4EFD5B6BD4A2F",
+        "sha1": "250383900A72C566DB302B84C3EEA556DEE150B2",
+        "sha256": "3652B0A2453858DF736E1FF16E04120B296641B22F98643A7ECA6F4F981C0C3C",
+        "file_type": "application/x-dosexec",
+        "file_type_category": "E",
+        "file_type_description": "Executable File",
+        "file_type_extension": "exe",
+        "display_name": "ChatGPT Installer.exe"
+      },
+      "data_id": "bzI2MDcyOW9SU2lZbVFNMmE4cVl3enFzMVds_mdaas",
+      "permalink": "https://metadefender.com/results/file/bzI2MDcyOW9SU2lZbVFNMmE4cVl3enFzMVds_mdaas/threats-prevented",
       "_ok": true
     }
   }
