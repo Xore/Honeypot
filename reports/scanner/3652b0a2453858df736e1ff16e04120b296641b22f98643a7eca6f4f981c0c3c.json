@@ -1,0 +1,62 @@
+{
+  "file": "samples/PE/ChatGPT Installer.exe",
+  "filename": "ChatGPT Installer.exe",
+  "sha256": "3652b0a2453858df736e1ff16e04120b296641b22f98643a7eca6f4f981c0c3c",
+  "sha1": "250383900a72c566db302b84c3eea556dee150b2",
+  "md5": "7be799cd97f424c820b4efd5b6bd4a2f",
+  "size": 1438752,
+  "scanned_at": "2026-07-29T18:16:14Z",
+  "results": {
+    "VirusTotalScanner": {
+      "source": "virustotal",
+      "known": false,
+      "analysis_id": "N2JlNzk5Y2Q5N2Y0MjRjODIwYjRlZmQ1YjZiZDRhMmY6MTc4NTM0ODk5MQ==",
+      "permalink": "https://www.virustotal.com/gui/file-analysis/N2JlNzk5Y2Q5N2Y0MjRjODIwYjRlZmQ1YjZiZDRhMmY6MTc4NTM0ODk5MQ==",
+      "status": "completed",
+      "positives": 0,
+      "total": 74,
+      "stats": {
+        "malicious": 0,
+        "suspicious": 0,
+        "undetected": 69,
+        "harmless": 0,
+        "timeout": 0,
+        "confirmed-timeout": 0,
+        "failure": 1,
+        "type-unsupported": 4
+      },
+      "_ok": true
+    },
+    "MalwareBazaarScanner": {
+      "source": "malwarebazaar",
+      "known": false,
+      "submitted": true,
+      "sha256": "",
+      "permalink": "https://bazaar.abuse.ch/sample//",
+      "_ok": true
+    },
+    "HybridAnalysisScanner": {
+      "source": "hybrid_analysis",
+      "known": false,
+      "job_id": "6a6a43b17f58e8f0bd0e233c",
+      "permalink": "https://www.hybrid-analysis.com/sample/3652b0a2453858df736e1ff16e04120b296641b22f98643a7eca6f4f981c0c3c",
+      "status": "completed",
+      "verdict": "suspicious",
+      "threat_score": 54,
+      "threat_level": null,
+      "av_detect": 0,
+      "_ok": true
+    },
+    "MetaDefenderScanner": {
+      "source": "metadefender",
+      "known": false,
+      "data_id": "bzI2MDcyOW9SU2lZbVFNMmE4cVl3enFzMVds_mdaas",
+      "permalink": "https://metadefender.com/results/file/bzI2MDcyOW9SU2lZbVFNMmE4cVl3enFzMVds_mdaas/threats-prevented",
+      "status": "completed",
+      "positives": 0,
+      "total": 22,
+      "scan_result": "No Threat Detected",
+      "_ok": true
+    }
+  }
+}
