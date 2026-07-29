@@ -304,7 +304,8 @@ jobs:
           mkdir -p reports/pdf
           python3 .github/scripts/report.py \
             --input-dir reports/scanner/ \
-            --output    "$PDF"
+            --output    "$PDF" \
+            --newer-than /tmp/honeypot-scan-start
           echo "pdf_path=$PDF" >> "$GITHUB_OUTPUT"
 
       - name: Upload PDF as artifact
