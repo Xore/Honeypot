@@ -161,6 +161,10 @@ TEMPLATE = """
   {% set vt_ok = vt.get('_ok', False) %}
   {% set md_ok = md.get('_ok', False) %}
   {% set mb_ok = mb.get('_ok', False) %}
+  {% set pending_statuses = ('queued', 'pending', 'in_queue', 'in_progress', 'timeout') %}
+  {% set vt_pending = vt.get('status', '') | lower in pending_statuses %}
+  {% set md_pending = md.get('status', '') | lower in pending_statuses %}
+  {% set mb_pending = mb.get('status', '') | lower in pending_statuses %}
   {% set vt_pos = vt.get('positives', 0) if vt_ok else None %}
   {% set any_ok = r.results.values() | selectattr('_ok') | list | length > 0 %}
   <tr>
@@ -168,7 +172,9 @@ TEMPLATE = """
     <td class="mono hash">{{ r.sha256[:32] }}&hellip;</td>
     <td>{{ "{:,}".format(r.size) }} B</td>
     <td>
-      {% if vt_ok %}
+      {% if vt_pending %}
+        <span class="badge-unknown">queued</span>
+      {% elif vt_ok %}
         {% if vt_pos > 0 %}
           <span class="badge-detected">{{ vt_pos }}/{{ vt.get('total','?') }}</span>
         {% else %}
@@ -179,7 +185,9 @@ TEMPLATE = """
       {% endif %}
     </td>
     <td>
-      {% if md_ok %}
+      {% if md_pending %}
+        <span class="badge-unknown">queued</span>
+      {% elif md_ok %}
         {% set md_pos = md.get('positives', 0) %}
         {% if md_pos > 0 %}
           <span class="badge-detected">{{ md_pos }}/{{ md.get('total','?') }}</span>
@@ -191,7 +199,9 @@ TEMPLATE = """
       {% endif %}
     </td>
     <td>
-      {% if mb_ok %}
+      {% if mb_pending %}
+        <span class="badge-unknown">queued</span>
+      {% elif mb_ok %}
         {% if mb.get('signature') %}
           <span class="badge-detected">{{ mb.signature }}</span>
         {% else %}
@@ -202,7 +212,9 @@ TEMPLATE = """
       {% endif %}
     </td>
     <td>
-      {% if any_ok %}
+      {% if vt_pending or md_pending or mb_pending %}
+        <span class="badge-unknown">PENDING</span>
+      {% elif any_ok %}
         <span class="badge-{% if vt_pos and vt_pos > 0 %}detected{% else %}clean{% endif %}">
           {% if vt_pos and vt_pos > 0 %}DETECTED{% else %}CLEAN / UNKNOWN{% endif %}
         </span>

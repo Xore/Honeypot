@@ -223,6 +223,7 @@ jobs:
           ANYRUN_API_KEY:        ${{ secrets.ANYRUN_API_KEY }}
           GITHUB_REPO:           ${{ github.repository }}
         run: |
+          touch /tmp/honeypot-scan-start
           python3 .github/scripts/analyze_samples.py \
             --file-list /tmp/changed_files.txt \
             --output-dir reports/scanner/ \
@@ -240,6 +241,20 @@ jobs:
             exit 2
           fi
           exit 0
+
+      - name: Wait for queued analysis reports
+        if: always() && steps.find_samples.outputs.count != '0'
+        env:
+          VT_API_KEY:             ${{ secrets.VT_API_KEY }}
+          MALWAREBAZAAR_API_KEY:  ${{ secrets.MALWAREBAZAAR_API_KEY }}
+          HYBRID_ANALYSIS_KEY:    ${{ secrets.HYBRID_ANALYSIS_KEY }}
+          METADEFENDER_API_KEY:   ${{ secrets.METADEFENDER_API_KEY }}
+        run: |
+          python3 .github/scripts/wait_for_reports.py \
+            --report-dir reports/scanner/ \
+            --newer-than /tmp/honeypot-scan-start \
+            --timeout-seconds 1200 \
+            --interval-seconds 30
 
       - name: Generate YARA rules from scan results
         # Runs after scanner; failures are non-fatal (|| true).
