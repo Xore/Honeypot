@@ -39,53 +39,112 @@ TEMPLATE = """
 <head>
 <meta charset="UTF-8">
 <style>
+  /* Print-safe light-mode snapshot of the canonical Xore/theme tokens. */
+  :root {
+    --app-bg: #f7f6f2;
+    --surface-0: #fbfaf7;
+    --surface-1: #f4f2ed;
+    --surface-2: #ebe9e3;
+    --border-subtle: rgba(34, 31, 28, 0.09);
+    --border-strong: rgba(34, 31, 28, 0.18);
+    --text-primary: #2f2b27;
+    --text-secondary: #68615a;
+    --text-muted: #918a82;
+    --text-link: #2a78d6;
+    --accent: #c76548;
+    --success: #3f8764;
+    --success-soft: rgba(63, 135, 100, 0.11);
+    --warning: #9b6b25;
+    --warning-soft: rgba(155, 107, 37, 0.11);
+    --danger: #b34f4c;
+    --danger-soft: rgba(179, 79, 76, 0.11);
+  }
   @page {
     size: A4;
-    margin: 20mm 18mm 20mm 18mm;
-    @top-right { content: "Xore Honeypot — Malware Scan Report"; font-size: 8pt; color: #888; }
-    @bottom-right { content: "Page " counter(page) " of " counter(pages); font-size: 8pt; color: #888; }
+    margin: 22mm 18mm 18mm;
+    background: var(--app-bg);
+    @top-left { content: "XORE//HONEYPOT"; font-size: 7.5pt; font-weight: 700;
+                letter-spacing: 0.08em; color: var(--text-primary); }
+    @top-right { content: "MALWARE SCAN REPORT"; font-size: 7.5pt;
+                 letter-spacing: 0.08em; color: var(--text-muted); }
+    @bottom-left { content: "PRIVATE - HOSTILE-SOURCE TELEMETRY";
+                   font-size: 7pt; color: var(--text-muted); }
+    @bottom-right { content: "Page " counter(page) " of " counter(pages);
+                    font-size: 7pt; color: var(--text-muted); }
   }
   * { box-sizing: border-box; }
-  body  { font-family: 'DejaVu Sans', Arial, sans-serif; font-size: 10pt; color: #222; }
-  h1    { font-size: 18pt; color: #1a1a2e; margin-bottom: 2mm; }
-  h2    { font-size: 13pt; color: #16213e; border-bottom: 1px solid #ccc;
-          padding-bottom: 1mm; margin-top: 8mm; page-break-after: avoid; }
-  h3    { font-size: 10pt; color: #0f3460; margin-top: 5mm; page-break-after: avoid; }
-  .meta { font-size: 8pt; color: #555; margin-bottom: 6mm; }
-  .badge-clean    { background: #28a745; color: #fff; padding: 1px 6px;
-                    border-radius: 3px; font-size: 8pt; }
-  .badge-detected { background: #dc3545; color: #fff; padding: 1px 6px;
-                    border-radius: 3px; font-size: 8pt; }
-  .badge-unknown  { background: #6c757d; color: #fff; padding: 1px 6px;
-                    border-radius: 3px; font-size: 8pt; }
-  .badge-error    { background: #fd7e14; color: #fff; padding: 1px 6px;
-                    border-radius: 3px; font-size: 8pt; }
-  table  { width: 100%; border-collapse: collapse; margin-top: 3mm; font-size: 8.5pt; }
-  th     { background: #1a1a2e; color: #fff; text-align: left;
-           padding: 3px 6px; font-size: 8pt; }
-  td     { padding: 3px 6px; border-bottom: 1px solid #eee; vertical-align: top; }
-  tr:nth-child(even) td { background: #f9f9f9; }
+  html, body { background: var(--app-bg); }
+  body { margin: 0; font-family: 'DejaVu Sans', Arial, sans-serif;
+         font-size: 9.5pt; line-height: 1.5; color: var(--text-primary); }
+  h1 { margin: 0 0 2mm; font-family: 'DejaVu Serif', Georgia, serif;
+       font-size: 24pt; font-weight: 400; letter-spacing: -0.025em;
+       color: var(--text-primary); }
+  h2 { margin: 9mm 0 3mm; padding: 0 0 2mm 4mm;
+       border-bottom: 1px solid var(--border-strong);
+       border-left: 3px solid var(--accent); font-size: 13pt;
+       color: var(--text-primary); page-break-after: avoid; }
+  h3 { margin: 0 0 3mm; font-size: 9.5pt; color: var(--text-primary);
+       page-break-after: avoid; }
+  .eyebrow { margin-bottom: 2mm; color: var(--accent); font-size: 7.5pt;
+             font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; }
+  .meta { padding: 3.5mm 4mm; border: 1px solid var(--border-subtle);
+          border-radius: 9px; background: var(--surface-1);
+          color: var(--text-secondary); font-size: 8pt; line-height: 1.65;
+          margin-bottom: 6mm; }
+  .classification { color: var(--danger); font-weight: 700; }
+  .badge-clean, .badge-detected, .badge-unknown, .badge-error {
+    display: inline-block; padding: 1px 7px; border-radius: 999px;
+    font-size: 7pt; font-weight: 700; white-space: nowrap;
+  }
+  .badge-clean    { background: var(--success-soft); color: var(--success); }
+  .badge-detected { background: var(--danger-soft); color: var(--danger); }
+  .badge-unknown  { background: var(--surface-2); color: var(--text-secondary); }
+  .badge-error    { background: var(--warning-soft); color: var(--warning); }
+  table { width: 100%; border-collapse: collapse; margin-top: 3mm; font-size: 8.2pt; }
+  th { border-bottom: 1px solid var(--border-strong); color: var(--text-muted);
+       text-align: left; padding: 2.5mm 2mm; font-size: 7pt; font-weight: 700;
+       letter-spacing: 0.055em; text-transform: uppercase; }
+  td { padding: 2.5mm 2mm; border-bottom: 1px solid var(--border-subtle);
+       color: var(--text-primary); vertical-align: top; }
+  tr:nth-child(even) td { background: rgba(244, 242, 237, 0.65); }
   .mono  { font-family: 'DejaVu Sans Mono', monospace; font-size: 7.5pt; }
   .hash  { word-break: break-all; }
-  .section-box { border: 1px solid #ddd; border-radius: 4px;
-                 padding: 4mm; margin-top: 4mm; page-break-inside: avoid; }
-  .error-box   { border: 1px solid #fd7e14; background: #fff8f0;
-                 border-radius: 4px; padding: 3mm; font-size: 8pt; color: #8a4000; }
+  .section-box { border: 1px solid var(--border-subtle); border-radius: 14px;
+                 background: var(--surface-0); padding: 4mm; margin-top: 4mm;
+                 page-break-inside: avoid; }
+  .section-box h3::before { content: ""; display: inline-block; width: 5px;
+                            height: 5px; margin-right: 2mm; border-radius: 2px;
+                            background: var(--accent); vertical-align: 1px; }
+  .error-box { border: 1px solid var(--warning); background: var(--warning-soft);
+               border-radius: 9px; padding: 3mm; font-size: 8pt;
+               color: var(--warning); }
   .toc li { margin: 1mm 0; }
-  .toc a  { color: #0f3460; text-decoration: none; }
-  .summary-table td, .summary-table th { font-size: 8pt; }
-  .permalink { font-size: 7pt; color: #0f3460; word-break: break-all; }
-  hr { border: none; border-top: 1px solid #ddd; margin: 5mm 0; }
+  .toc a  { color: var(--text-link); text-decoration: none; }
+  .summary-table { table-layout: fixed; }
+  .summary-table td, .summary-table th { padding-left: 1.2mm; padding-right: 1.2mm;
+                                         font-size: 6.5pt; overflow-wrap: anywhere; }
+  .summary-table th:nth-child(1) { width: 22%; }
+  .summary-table th:nth-child(2) { width: 19%; }
+  .summary-table th:nth-child(3) { width: 8%; }
+  .summary-table th:nth-child(4) { width: 9%; }
+  .summary-table th:nth-child(5) { width: 12%; }
+  .summary-table th:nth-child(6) { width: 14%; }
+  .summary-table th:nth-child(7) { width: 16%; }
+  .summary-table .mono { font-size: 6pt; }
+  .permalink { font-size: 7pt; color: var(--text-link); word-break: break-all; }
+  hr { border: none; border-top: 1px solid var(--border-strong); margin: 7mm 0; }
 </style>
 </head>
 <body>
 
-<h1>&#x1F50E; Malware Scan Report</h1>
+<div class="eyebrow">Defensive security operations</div>
+<h1>Malware Scan Report</h1>
 <div class="meta">
   Generated: {{ generated_at }}<br>
   Repository: {{ repo }}<br>
   Run: {{ run_id }}<br>
-  Total samples: {{ reports | length }}
+  Total samples: {{ reports | length }}<br>
+  <span class="classification">Classification: PRIVATE - contains hostile-source telemetry and forensic indicators</span>
 </div>
 
 <!-- Executive Summary -->
