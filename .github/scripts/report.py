@@ -295,6 +295,15 @@ def _safe_stem(name: str) -> str:
     return stem or 'sample'
 
 
+def _report_files(input_dir: Path, newer_than: Path | None = None) -> list[Path]:
+    """Return reports in scope, optionally limited to the current scan run."""
+    report_files = sorted(input_dir.glob('*.json'))
+    if newer_than is None:
+        return report_files
+    minimum_mtime = newer_than.stat().st_mtime
+    return [path for path in report_files if path.stat().st_mtime >= minimum_mtime]
+
+
 def render_sample_pdfs(reports: list, out_dir: Path, generated_at: str,
                        repo: str, run_id: str) -> None:
     """One PDF per sample, named <payload-name>-<scan-date>.pdf.
@@ -326,13 +335,19 @@ def main():
     parser.add_argument('--output',    required=True)
     parser.add_argument('--per-sample-dir', default='reports/pdf/samples/',
                         help='Directory for one PDF per sample (payload name + date)')
+    parser.add_argument(
+        '--newer-than',
+        type=Path,
+        help='Only include scanner JSON modified after this marker file',
+    )
     args = parser.parse_args()
 
     input_dir = Path(args.input_dir)
-    report_files = sorted(input_dir.glob('*.json'))
+    report_files = _report_files(input_dir, args.newer_than)
 
     if not report_files:
-        print(f'No JSON reports found in {input_dir}', file=sys.stderr)
+        scope = f' newer than {args.newer_than}' if args.newer_than else ''
+        print(f'No JSON reports found in {input_dir}{scope}', file=sys.stderr)
         sys.exit(0)  # not an error — nothing to report
 
     reports = []
