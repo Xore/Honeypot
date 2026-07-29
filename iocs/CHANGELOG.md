@@ -44,3 +44,8 @@
 - New IOC files: 0
 - YARA rules generated: 0 new, 0 updated
 - Triggered by: workflow_dispatch (a6f196c577b4111b158028cdf48f64bb3749d44e)
+
+## 2026-07-29
+- New IOC files: 0
+- YARA rules generated: 15 new, 0 updated
+- Triggered by: push (3f1382e6bd77d24c18ba17252564989ccd977275)
