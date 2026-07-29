@@ -306,6 +306,7 @@ class VirusTotalScanner(BaseScanner):
             status = attr.get('status')
             if status == 'completed':
                 stats = attr.get('stats', {})
+                log.info(f'  VT poll [{attempt+1}/24] status=completed')
                 return {
                     **base, 'status': 'completed',
                     'positives': stats.get('malicious', 0),
@@ -375,7 +376,7 @@ class MalwareBazaarScanner(BaseScanner):
             }
         return None  # hash_not_found → proceed to upload
 
-    def _upload(self, path):
+    def _upload(self, path, sha256):
         # Pack all metadata into json_data as required by the API spec.
         # Auth-Key goes in the header only — NOT in the form body.
         json_data = {
@@ -409,19 +410,22 @@ class MalwareBazaarScanner(BaseScanner):
             return {
                 'source': 'malwarebazaar', 'known': False,
                 'submitted': True,
+                'status': 'queued',
+                'sha256': sha256,
                 'note': 'empty response body — possible duplicate or rate-limit',
-                'permalink': 'https://bazaar.abuse.ch/browse/',
+                'permalink': f'https://bazaar.abuse.ch/sample/{sha256}/',
             }
 
         status = d.get('query_status', '')
         log.info(f'  MalwareBazaar: query_status={status}')
 
         if status == 'inserted':
-            sha = d.get('data', {}).get('sha256_hash', '')
+            sha = d.get('data', {}).get('sha256_hash') or sha256
             log.info(f'  MalwareBazaar: inserted → {sha}')
             return {
                 'source': 'malwarebazaar', 'known': False,
                 'submitted': True,
+                'status': 'queued',
                 'sha256': sha,
                 'permalink': f'https://bazaar.abuse.ch/sample/{sha}/',
             }
@@ -444,7 +448,7 @@ class MalwareBazaarScanner(BaseScanner):
             log.info(f'  MalwareBazaar: known → {result.get("signature")}')
             return result
         log.info(f'  MalwareBazaar: uploading {path.name}...')
-        return self._upload(path)
+        return self._upload(path, hashes['sha256'])
 
 
 # ── Scanner 3: Hybrid-Analysis ───────────────────────────────────────────────
