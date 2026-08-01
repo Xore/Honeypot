@@ -74,10 +74,10 @@ rule PDF_JavaScript_Exploit
     condition:
         $pdf_magic at 0
         and (
-            ($js1 and $js3 and ($js4 or $js5)) or
+            (($js1 or $js2) and $js3 and ($js4 or $js5 or $js6)) or
             ($js10 or $js11) or
             ($js7 or $js8 or $js9) or
-            ($js12 and $js1)
+            ($js12 and ($js1 or $js2))
         )
 }
 

@@ -41,10 +41,6 @@ rule Mirai_Generic
         $c2_4 = "nigger" ascii  // found in many Mirai variants
         $c2_5 = "Botnet" ascii
 
-        // Common Mirai anti-forensics
-        $af1 = "/proc/" ascii
-        $af2 = "watchdog" ascii
-
     condition:
         uint32(0) == 0x464C457F  // ELF magic
         and filesize < 2MB
@@ -74,10 +70,6 @@ rule Miori_Variant
         $m7 = "chmod 777" ascii
         $m8 = "tftp" ascii
 
-        // Miori C2 beacon pattern
-        $beacon1 = { 2F 62 69 6E 2F 62 75 73 79 62 6F 78 }  // /bin/busybox
-        $beacon2 = { 68 74 74 70 3A 2F 2F }                  // http://
-
         // Miori download-and-exec pattern
         $dl1 = "wget -O-" ascii
         $dl2 = "curl -o" ascii
@@ -102,10 +94,6 @@ rule Mirai_CNC_Communication
         family      = "Mirai"
 
     strings:
-        // XOR-encoded string decryption (Mirai uses table XOR)
-        $xor_key  = { 22 22 22 22 }  // common Mirai XOR key 0x22
-        $xor_key2 = { DE AD BE EF }  // alternative key seen in forks
-
         // Loader strings
         $load1 = "asshole" ascii
         $load2 = "hacktheplanet" ascii
@@ -117,10 +105,7 @@ rule Mirai_CNC_Communication
     condition:
         uint32(0) == 0x464C457F
         and filesize < 2MB
-        and (
-            any of ($load*) or
-            ($xor_key and 2 of ($load*))
-        )
+        and any of ($load*)
 }
 
 rule Mirai_Downloader_Script

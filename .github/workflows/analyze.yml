@@ -7,8 +7,10 @@
 #       a) No scanner API key secrets are set at all
 #       b) File list cannot be read
 #       c) Every scanner errored on every file (exit 2)
+#       d) A checked-in YARA rule does not compile
 #   - Deleted files are NEVER scanned (--diff-filter=AR)
-#   - Deletion-only or structural-only pushes skip the entire job immediately.
+#   - Deletion-only, rule-only, and structural-only changes validate the rule
+#     corpus but never submit existing samples to external scanners.
 #   - Only genuinely new (Added) or renamed (Renamed) sample files are scanned.
 #     Modified files are intentionally excluded: a file that already exists in
 #     samples/ was already scanned on the commit that Added it. Re-scanning on
@@ -40,10 +42,14 @@ on:
     branches: [main]
     paths:
       - 'samples/**'
+      - 'yara-rules/**'
+      - '.github/workflows/analyze.yml'
   pull_request:
     branches: [main]
     paths:
       - 'samples/**'
+      - 'yara-rules/**'
+      - '.github/workflows/analyze.yml'
   schedule:
     # Weekly rescan every Sunday at 02:00 UTC — catches improved detections
     - cron: '0 2 * * 0'
@@ -76,20 +82,6 @@ jobs:
           # fetch-depth 0 for scheduled full rescan; 2 for push/PR diffs
           fetch-depth: ${{ github.event_name == 'schedule' && '0' || '2' }}
           token: ${{ secrets.GH_PAT }}
-
-      - name: Skip if no new sample files
-        if: github.event_name != 'workflow_dispatch' && github.event_name != 'schedule'
-        run: |
-          set -euo pipefail
-          ADDED=$(git diff --name-only --diff-filter=AR HEAD~1 HEAD \
-            -- 'samples/' 2>/dev/null \
-            | grep -v '\.gitkeep$' | wc -l \
-            || git ls-files samples/ | grep -v '\.gitkeep$' | wc -l)
-          if [ "$ADDED" -eq 0 ]; then
-            echo "No new sample files in this push — skipping pipeline."
-            exit 0
-          fi
-          echo "$ADDED new sample file(s) detected — continuing."
 
       - name: Set up Python
         # actions/setup-python v7 — pinned SHA
@@ -135,6 +127,12 @@ jobs:
             libpango-1.0-0 libpangoft2-1.0-0 libharfbuzz0b \
             fonts-dejavu-core yara binutils
 
+      - name: Validate YARA rules
+        run: bash .github/scripts/validate_yara.sh
+
+      - name: Test YARA rule generator
+        run: python3 -m unittest discover -s .github/scripts/tests -p 'test_*.py'
+
       - name: Detect changed sample files
         id: find_samples
         run: |
@@ -143,19 +141,19 @@ jobs:
             TARGET="${{ github.event.inputs.sample_path }}"
             if [ -f "$TARGET" ]; then
               echo "$TARGET" > /tmp/changed_files.txt
+            elif [ -d "$TARGET" ]; then
+              find "$TARGET" -type f | awk '!/\.gitkeep$/' > /tmp/changed_files.txt
             else
-              find "$TARGET" -type f 2>/dev/null \
-                | grep -v '\.gitkeep$' > /tmp/changed_files.txt || true
+              echo "::error::Requested sample path does not exist: $TARGET"
+              exit 1
             fi
           elif [ "${{ github.event_name }}" = "schedule" ]; then
-            find samples/ -type f | grep -v '\.gitkeep$' > /tmp/changed_files.txt || true
+            find samples/ -type f | awk '!/\.gitkeep$/' > /tmp/changed_files.txt
           else
             git diff --name-only --diff-filter=AR HEAD~1 HEAD \
               -- 'samples/' \
-              | grep -v '/$' \
-              | grep -v '\.gitkeep$' \
-              > /tmp/changed_files.txt 2>/dev/null \
-              || find samples/ -type f | grep -v '\.gitkeep$' > /tmp/changed_files.txt || true
+              | awk '!/\.gitkeep$/' \
+              > /tmp/changed_files.txt
           fi
 
           if [ -f /tmp/changed_files.txt ]; then
@@ -257,7 +255,9 @@ jobs:
             --interval-seconds 30
 
       - name: Generate YARA rules from scan results
-        # Runs after scanner; failures are non-fatal (|| true).
+        # Runs after scanner. Generator exceptions remain non-fatal so reports
+        # survive, but the post-generation compile gate below rejects invalid
+        # active rules and keeps them out of the bot commit.
         # Reads reports/scanner/*.json, extracts strings from sample binaries,
         # emits rules to yara-rules/auto/<family>.yar.
         # New rules are then automatically picked up by the next YARA pre-scan.
@@ -275,6 +275,12 @@ jobs:
           echo "yara_new=$NEW"     >> "$GITHUB_OUTPUT"
           echo "yara_updated=$UPD" >> "$GITHUB_OUTPUT"
           echo "::notice::YARA rule generation: $NEW new, $UPD updated"
+
+      - name: Validate generated YARA rules
+        id: yara_postcheck
+        if: steps.find_samples.outputs.count != '0'
+        continue-on-error: true
+        run: bash .github/scripts/validate_yara.sh
 
       - name: Update IOC changelog
         if: steps.find_samples.outputs.count != '0'
@@ -327,7 +333,12 @@ jobs:
         run: |
           git config user.name  "honeypot-bot"
           git config user.email "honeypot-bot@noreply.github.com"
-          git add reports/ iocs/ yara-rules/auto/ 2>/dev/null || true
+          if [ "${{ steps.yara_postcheck.outcome }}" = "success" ]; then
+            git add reports/ iocs/ yara-rules/auto/ 2>/dev/null || true
+          else
+            echo "::error::Generated YARA validation failed; committing reports and IOCs only."
+            git add reports/ iocs/ 2>/dev/null || true
+          fi
           if git diff --cached --quiet; then
             echo "Nothing new to commit."
           else
@@ -336,6 +347,10 @@ jobs:
             git commit -m "bot: scanner results $(date +%Y-%m-%d) | yara +${YARA_NEW} ~${YARA_UPD} [skip ci]"
             git push
           fi
+
+      - name: Fail on invalid generated YARA
+        if: always() && steps.yara_postcheck.outcome == 'failure'
+        run: exit 1
 
       - name: Job summary
         if: always()
