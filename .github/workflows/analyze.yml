@@ -141,22 +141,10 @@ jobs:
             fonts-dejavu-core yara binutils
 
       - name: Validate YARA rules
-        run: |
-          set -euo pipefail
-          failed=0
-          count=0
-          while IFS= read -r -d '' rulefile; do
-            count=$((count + 1))
-            echo "Compiling $rulefile"
-            if ! yara -w "$rulefile" /dev/null; then
-              failed=1
-            fi
-          done < <(find yara-rules/ -type f \( -name '*.yar' -o -name '*.yara' \) ! -name '*_invalid*' -print0)
-          if [ "$count" -eq 0 ]; then
-            echo "::error::No YARA rules found."
-            exit 1
-          fi
-          exit "$failed"
+        run: bash .github/scripts/validate_yara.sh
+
+      - name: Test YARA rule generator
+        run: python3 -m unittest discover -s .github/scripts/tests -p 'test_*.py'
 
       - name: Detect changed sample files
         id: find_samples
@@ -280,7 +268,9 @@ jobs:
             --interval-seconds 30
 
       - name: Generate YARA rules from scan results
-        # Runs after scanner; failures are non-fatal (|| true).
+        # Runs after scanner. Generator exceptions remain non-fatal so reports
+        # survive, but the post-generation compile gate below rejects invalid
+        # active rules and keeps them out of the bot commit.
         # Reads reports/scanner/*.json, extracts strings from sample binaries,
         # emits rules to yara-rules/auto/<family>.yar.
         # New rules are then automatically picked up by the next YARA pre-scan.
@@ -298,6 +288,12 @@ jobs:
           echo "yara_new=$NEW"     >> "$GITHUB_OUTPUT"
           echo "yara_updated=$UPD" >> "$GITHUB_OUTPUT"
           echo "::notice::YARA rule generation: $NEW new, $UPD updated"
+
+      - name: Validate generated YARA rules
+        id: yara_postcheck
+        if: steps.find_samples.outputs.count != '0'
+        continue-on-error: true
+        run: bash .github/scripts/validate_yara.sh
 
       - name: Update IOC changelog
         if: steps.find_samples.outputs.count != '0'
@@ -350,7 +346,12 @@ jobs:
         run: |
           git config user.name  "honeypot-bot"
           git config user.email "honeypot-bot@noreply.github.com"
-          git add reports/ iocs/ yara-rules/auto/ 2>/dev/null || true
+          if [ "${{ steps.yara_postcheck.outcome }}" = "success" ]; then
+            git add reports/ iocs/ yara-rules/auto/ 2>/dev/null || true
+          else
+            echo "::error::Generated YARA validation failed; committing reports and IOCs only."
+            git add reports/ iocs/ 2>/dev/null || true
+          fi
           if git diff --cached --quiet; then
             echo "Nothing new to commit."
           else
@@ -359,6 +360,10 @@ jobs:
             git commit -m "bot: scanner results $(date +%Y-%m-%d) | yara +${YARA_NEW} ~${YARA_UPD} [skip ci]"
             git push
           fi
+
+      - name: Fail on invalid generated YARA
+        if: always() && steps.yara_postcheck.outcome == 'failure'
+        run: exit 1
 
       - name: Job summary
         if: always()

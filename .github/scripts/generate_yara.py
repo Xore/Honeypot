@@ -20,9 +20,10 @@ What it does
    - Emits a well-formed YARA rule skeleton with meta + string conditions
 5. For families that already have a rule:
    - Checks whether new unique strings should be appended (update mode)
-6. Validates every generated rule with `yara --compile` before saving.
+6. Validates every generated rule with `yara -w <rule> /dev/null` before saving.
    Invalid rules are written to yara-rules/auto/_invalid/ for manual review.
-7. Exits 0 always — a rule-gen failure must never abort the scan pipeline.
+7. Exits 0 always — the workflow separately compiles the active corpus after
+   generation, while preserving scanner reports when generator output is bad.
 8. Skips any report whose sha256 is already tracked in GENERATED.md to avoid
    re-processing samples on re-runs.
 
@@ -318,8 +319,7 @@ def build_rule(
     # #109: "3 of 20" fires on almost anything once N stops scaling with the
     # string count. Require ~40% of the strings to match instead of capping
     # at a flat 3, so a 20-string rule needs 8 hits, not 3.
-    n_cond = max(MIN_STRINGS_RULE, math.ceil(len(strings) * 0.4))
-    n_cond = min(n_cond, len(strings))
+    n_cond = required_string_matches(len(strings))
     if condition == 'all':
         lines.append('        all of them')
     elif condition == 'any':
@@ -330,6 +330,14 @@ def build_rule(
     lines.append('')
 
     return '\n'.join(lines)
+
+
+def required_string_matches(string_count: int) -> int:
+    """Return the minimum matches for a generated string rule."""
+    return min(
+        max(MIN_STRINGS_RULE, math.ceil(string_count * 0.4)),
+        string_count,
+    )
 
 
 def build_hash_only_rule(
@@ -391,7 +399,9 @@ def existing_rule_signatures(output_dir: Path) -> dict[str, str]:
         if f.stem.startswith('_'):
             continue
         try:
-            vals = re.findall(r'\$s\d+\s*=\s*"([^"]*)"', f.read_text())
+            vals = re.findall(
+                r'\$s\d+\s*=\s*"([^"]*)"', f.read_text(encoding='utf-8')
+            )
         except Exception:
             continue
         if vals:
@@ -402,30 +412,22 @@ def existing_rule_signatures(output_dir: Path) -> dict[str, str]:
 def validate_rule(rule_text: str) -> tuple[bool, str]:
     """Compile rule with `yara` CLI; return (valid, error_message)."""
     if not shutil.which('yara'):
-        # yara not available — skip validation, assume valid
-        return True, ''
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.yar',
+        return False, 'yara executable not found; refusing unvalidated output'
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.yar', encoding='utf-8',
                                      delete=False) as tmp:
         tmp.write(rule_text)
         tmp_path = tmp.name
     try:
         # Use a dummy target file (the rule file itself) — we only care about compile
         r = subprocess.run(
-            ['yara', '--compile-rules', tmp_path],
+            ['yara', '-w', tmp_path, os.devnull],
             capture_output=True, text=True, timeout=10,
         )
         if r.returncode == 0:
             return True, ''
-        # Some yara versions don't support --compile-rules; try scanning /dev/null
-        r2 = subprocess.run(
-            ['yara', tmp_path, '/dev/null'],
-            capture_output=True, text=True, timeout=10,
-        )
-        if r2.returncode == 0:
-            return True, ''
-        return False, (r2.stderr or r2.stdout).strip()
+        return False, (r.stderr or r.stdout).strip()
     except Exception as e:
-        return True, f'validation skipped: {e}'  # soft pass
+        return False, f'validation failed: {e}'
     finally:
         os.unlink(tmp_path)
 
@@ -468,7 +470,7 @@ def collect_family_names(report: dict) -> list[str]:
 def parse_report(report_path: Path, sample_dir: Path) -> dict | None:
     """Parse a scanner JSON report and return a profile dict."""
     try:
-        data = json.loads(report_path.read_text())
+        data = json.loads(report_path.read_text(encoding='utf-8'))
     except Exception as e:
         log.warning(f'Cannot parse {report_path.name}: {e}')
         return None
@@ -553,7 +555,7 @@ def load_processed_sha256s(output_dir: Path) -> set[str]:
         if yar.stem.startswith('_'):
             continue
         try:
-            for line in yar.read_text().splitlines():
+            for line in yar.read_text(encoding='utf-8').splitlines():
                 m = re.search(r'sample_sha256\s*=\s*"([0-9a-f]{64})"', line)
                 if m:
                     seen.add(m.group(1))
@@ -562,18 +564,24 @@ def load_processed_sha256s(output_dir: Path) -> set[str]:
     return seen
 
 
-def append_new_strings_to_rule(rule_path: Path, new_strings: list[str]) -> bool:
-    """Read an existing rule and append new string entries if not already present."""
+def append_new_strings_to_rule(
+    rule_path: Path,
+    new_strings: list[str],
+) -> tuple[bool, str, str | None]:
+    """Append strings, rescale the threshold, and validate before replacing."""
     try:
-        content = rule_path.read_text()
-    except Exception:
-        return False
+        content = rule_path.read_text(encoding='utf-8')
+    except Exception as e:
+        return False, f'cannot read existing rule: {e}', None
+
+    if 'hash_only   = true' in content or 'strings:' not in content:
+        return False, 'existing rule is hash-only', None
 
     # Find existing string values to avoid duplication
     existing_vals = set(re.findall(r'\$s\d+\s*=\s*"([^"]+)"', content))
     to_add = [s for s in new_strings if s not in existing_vals]
     if not to_add:
-        return False
+        return False, '', None
 
     # Find the last $sN index
     indices = [int(m) for m in re.findall(r'\$s(\d+)', content)]
@@ -591,8 +599,24 @@ def append_new_strings_to_rule(rule_path: Path, new_strings: list[str]) -> bool:
         '\n' + '\n'.join(new_lines) + r'\1',
         content,
     )
-    rule_path.write_text(updated)
-    return True
+
+    total_strings = len(existing_vals) + len(new_lines)
+    threshold = required_string_matches(total_strings)
+    updated, replacements = re.subn(
+        r'(?m)^(\s*)\d+\s+of\s+\(\$s\*\)\s*$',
+        rf'\g<1>{threshold} of ($s*)',
+        updated,
+        count=1,
+    )
+    if replacements != 1:
+        return False, 'generated rule has no scalable $s* threshold', updated
+
+    valid, error = validate_rule(updated)
+    if not valid:
+        return False, error, updated
+
+    rule_path.write_text(updated, encoding='utf-8')
+    return True, '', updated
 
 
 def generate_index(output_dir: Path, new_rules: list[str], updated_rules: list[str]) -> None:
@@ -615,10 +639,10 @@ def generate_index(output_dir: Path, new_rules: list[str], updated_rules: list[s
 
     lines += ['', '## Notes',
               '- `auto_generated = true` meta tag marks all rules here.',
-              '- Invalid rules (failed `yara --compile`) are in `_invalid/`.',
+              '- Invalid rules (failed YARA compilation) are in `_invalid/`.',
               '- To promote a rule to `yara-rules/`, copy and refine it there.']
 
-    index_path.write_text('\n'.join(lines) + '\n')
+    index_path.write_text('\n'.join(lines) + '\n', encoding='utf-8')
 
 
 def run(report_dir: Path, sample_dir: Path, output_dir: Path) -> int:
@@ -741,10 +765,12 @@ def run(report_dir: Path, sample_dir: Path, output_dir: Path) -> int:
                 rule_path  = output_dir / f'{rule_key}.yar'
                 if not valid:
                     log.warning(f'  [{family}] hash-only rule failed validation: {err}')
-                    (invalid_dir / f'{rule_key}.yar').write_text(f'// INVALID — {err}\n\n{rule_text}')
+                    (invalid_dir / f'{rule_key}.yar').write_text(
+                        f'// INVALID — {err}\n\n{rule_text}', encoding='utf-8'
+                    )
                     invalid += 1
                     continue
-                rule_path.write_text(rule_text)
+                rule_path.write_text(rule_text, encoding='utf-8')
                 log.info(f'  [{family}] {len(best_strings)} discriminating strings '
                          f'after boilerplate filtering — wrote hash-only rule '
                          f'({len(sha256s)} sample(s)) instead')
@@ -767,13 +793,48 @@ def run(report_dir: Path, sample_dir: Path, output_dir: Path) -> int:
             continue
 
         if rule_key in existing_rules:
-            # Update mode: try to append new strings
             rule_path = existing_rules[rule_key]
-            added = append_new_strings_to_rule(rule_path, best_strings)
+            existing_text = rule_path.read_text(encoding='utf-8')
+
+            # A hash-only rule has no strings block to append to. Once later
+            # telemetry provides enough discriminating strings, replace it
+            # with a normal generated rule instead of producing invalid YARA.
+            if 'hash_only   = true' in existing_text:
+                rule_text = build_rule(
+                    family      = family,
+                    description = f'Auto-generated for {family}',
+                    strings     = best_strings,
+                    sha256_list = sha256s,
+                    file_types  = file_types,
+                    tags        = list(dict.fromkeys(tags)),
+                    references  = list(dict.fromkeys(references)),
+                )
+                valid, err = validate_rule(rule_text)
+                if not valid:
+                    log.warning(f'  [{family}] hash-only promotion failed validation: {err}')
+                    (invalid_dir / f'{rule_key}.yar').write_text(
+                        f'// INVALID — {err}\n\n{rule_text}', encoding='utf-8'
+                    )
+                    invalid += 1
+                    continue
+                rule_path.write_text(rule_text, encoding='utf-8')
+                log.info(f'  [{family}] promoted hash-only rule to string rule')
+                updated_rules.append(rule_key)
+                written_sigs[sig] = rule_path.name
+                continue
+
+            added, err, candidate = append_new_strings_to_rule(rule_path, best_strings)
             if added:
                 log.info(f'  [{family}] updated existing rule → {rule_path.name}')
                 updated_rules.append(rule_key)
                 written_sigs[sig] = rule_path.name
+            elif err:
+                log.warning(f'  [{family}] rule update failed validation: {err}')
+                if candidate is not None:
+                    (invalid_dir / f'{rule_key}.yar').write_text(
+                        f'// INVALID — {err}\n\n{candidate}', encoding='utf-8'
+                    )
+                invalid += 1
             else:
                 log.info(f'  [{family}] no new strings to add — unchanged')
         else:
@@ -793,11 +854,13 @@ def run(report_dir: Path, sample_dir: Path, output_dir: Path) -> int:
             if not valid:
                 log.warning(f'  [{family}] rule failed validation: {err}')
                 inv_path = invalid_dir / f'{rule_key}.yar'
-                inv_path.write_text(f'// INVALID — {err}\n\n{rule_text}')
+                inv_path.write_text(
+                    f'// INVALID — {err}\n\n{rule_text}', encoding='utf-8'
+                )
                 invalid += 1
                 continue
 
-            rule_path.write_text(rule_text)
+            rule_path.write_text(rule_text, encoding='utf-8')
             log.info(f'  [{family}] new rule → {rule_path.name} ({len(best_strings)} strings)')
             new_rules.append(rule_key)
             written_sigs[sig] = rule_path.name

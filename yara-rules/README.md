@@ -30,8 +30,7 @@ The GitHub Actions workflow (`analyze.yml`) automatically runs all `*.yar` and
    validates the complete curated and auto-generated corpus on rule changes:
 
    ```bash
-   find yara-rules/ -type f \( -name '*.yar' -o -name '*.yara' \) ! -name '*_invalid*' -print0 |
-     while IFS= read -r -d '' rulefile; do yara -w "$rulefile" /dev/null || exit 1; done
+   bash .github/scripts/validate_yara.sh
    ```
 
 ## Sources / Upstream
