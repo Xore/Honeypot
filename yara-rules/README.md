@@ -26,6 +26,13 @@ The GitHub Actions workflow (`analyze.yml`) automatically runs all `*.yar` and
    - `author`
    - `date` (YYYY-MM-DD)
    - `reference` (if available)
+4. Every checked-in rule file must compile independently. The analysis workflow
+   validates the complete curated and auto-generated corpus on rule changes:
+
+   ```bash
+   find yara-rules/ -type f \( -name '*.yar' -o -name '*.yara' \) ! -name '*_invalid*' -print0 |
+     while IFS= read -r -d '' rulefile; do yara -w "$rulefile" /dev/null || exit 1; done
+   ```
 
 ## Sources / Upstream
 

@@ -7,6 +7,7 @@
 #       a) No scanner API key secrets are set at all
 #       b) File list cannot be read
 #       c) Every scanner errored on every file (exit 2)
+#       d) A checked-in YARA rule does not compile
 #   - Deleted files are NEVER scanned (--diff-filter=AR)
 #   - Deletion-only or structural-only pushes skip the entire job immediately.
 #   - Only genuinely new (Added) or renamed (Renamed) sample files are scanned.
@@ -40,10 +41,14 @@ on:
     branches: [main]
     paths:
       - 'samples/**'
+      - 'yara-rules/**'
+      - '.github/workflows/analyze.yml'
   pull_request:
     branches: [main]
     paths:
       - 'samples/**'
+      - 'yara-rules/**'
+      - '.github/workflows/analyze.yml'
   schedule:
     # Weekly rescan every Sunday at 02:00 UTC — catches improved detections
     - cron: '0 2 * * 0'
@@ -134,6 +139,24 @@ jobs:
             p7zip-full libmagic1 \
             libpango-1.0-0 libpangoft2-1.0-0 libharfbuzz0b \
             fonts-dejavu-core yara binutils
+
+      - name: Validate YARA rules
+        run: |
+          set -euo pipefail
+          failed=0
+          count=0
+          while IFS= read -r -d '' rulefile; do
+            count=$((count + 1))
+            echo "Compiling $rulefile"
+            if ! yara -w "$rulefile" /dev/null; then
+              failed=1
+            fi
+          done < <(find yara-rules/ -type f \( -name '*.yar' -o -name '*.yara' \) ! -name '*_invalid*' -print0)
+          if [ "$count" -eq 0 ]; then
+            echo "::error::No YARA rules found."
+            exit 1
+          fi
+          exit "$failed"
 
       - name: Detect changed sample files
         id: find_samples

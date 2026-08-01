@@ -78,9 +78,10 @@ rule PowerShell_Encoded_Command
     condition:
         filesize < 5MB
         and (
-            ($ps6 and $ps4) or
+            (($ps6 or $ps7) and ($ps4 or $ps5)) or
             ($ps1 or $ps2) or
-            (2 of ($ps8, $ps9, $ps10) and ($ps11 or $ps12 or $ps14))
+            ($ps3 and ($ps4 or $ps5)) or
+            (2 of ($ps8, $ps9, $ps10) and ($ps11 or $ps12 or $ps13 or $ps14))
         )
 }
 
@@ -103,7 +104,7 @@ rule PowerShell_Reverse_Shell
 
     condition:
         filesize < 5MB
-        and $r1 and $r5 and ($r3 or $r4) and ($r6 or $r7)
+        and ($r1 or $r2) and $r5 and ($r3 or $r4) and ($r6 or $r7 or $r8)
 }
 
 rule Python_Backdoor
@@ -128,7 +129,10 @@ rule Python_Backdoor
 
     condition:
         filesize < 5MB
-        and $py1 and ($py4 or $py5) and ($py9 or $py10 or $py8)
+        and $py1
+        and ($py2 or $py3)
+        and ($py4 or $py5 or $py6 or $py7)
+        and ($py8 or $py9 or $py10 or $py11)
 }
 
 rule VBScript_Dropper
