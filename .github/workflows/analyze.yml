@@ -9,7 +9,8 @@
 #       c) Every scanner errored on every file (exit 2)
 #       d) A checked-in YARA rule does not compile
 #   - Deleted files are NEVER scanned (--diff-filter=AR)
-#   - Deletion-only or structural-only pushes skip the entire job immediately.
+#   - Deletion-only, rule-only, and structural-only changes validate the rule
+#     corpus but never submit existing samples to external scanners.
 #   - Only genuinely new (Added) or renamed (Renamed) sample files are scanned.
 #     Modified files are intentionally excluded: a file that already exists in
 #     samples/ was already scanned on the commit that Added it. Re-scanning on
@@ -82,20 +83,6 @@ jobs:
           fetch-depth: ${{ github.event_name == 'schedule' && '0' || '2' }}
           token: ${{ secrets.GH_PAT }}
 
-      - name: Skip if no new sample files
-        if: github.event_name != 'workflow_dispatch' && github.event_name != 'schedule'
-        run: |
-          set -euo pipefail
-          ADDED=$(git diff --name-only --diff-filter=AR HEAD~1 HEAD \
-            -- 'samples/' 2>/dev/null \
-            | grep -v '\.gitkeep$' | wc -l \
-            || git ls-files samples/ | grep -v '\.gitkeep$' | wc -l)
-          if [ "$ADDED" -eq 0 ]; then
-            echo "No new sample files in this push — skipping pipeline."
-            exit 0
-          fi
-          echo "$ADDED new sample file(s) detected — continuing."
-
       - name: Set up Python
         # actions/setup-python v7 — pinned SHA
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
@@ -154,19 +141,19 @@ jobs:
             TARGET="${{ github.event.inputs.sample_path }}"
             if [ -f "$TARGET" ]; then
               echo "$TARGET" > /tmp/changed_files.txt
+            elif [ -d "$TARGET" ]; then
+              find "$TARGET" -type f | awk '!/\.gitkeep$/' > /tmp/changed_files.txt
             else
-              find "$TARGET" -type f 2>/dev/null \
-                | grep -v '\.gitkeep$' > /tmp/changed_files.txt || true
+              echo "::error::Requested sample path does not exist: $TARGET"
+              exit 1
             fi
           elif [ "${{ github.event_name }}" = "schedule" ]; then
-            find samples/ -type f | grep -v '\.gitkeep$' > /tmp/changed_files.txt || true
+            find samples/ -type f | awk '!/\.gitkeep$/' > /tmp/changed_files.txt
           else
             git diff --name-only --diff-filter=AR HEAD~1 HEAD \
               -- 'samples/' \
-              | grep -v '/$' \
-              | grep -v '\.gitkeep$' \
-              > /tmp/changed_files.txt 2>/dev/null \
-              || find samples/ -type f | grep -v '\.gitkeep$' > /tmp/changed_files.txt || true
+              | awk '!/\.gitkeep$/' \
+              > /tmp/changed_files.txt
           fi
 
           if [ -f /tmp/changed_files.txt ]; then
