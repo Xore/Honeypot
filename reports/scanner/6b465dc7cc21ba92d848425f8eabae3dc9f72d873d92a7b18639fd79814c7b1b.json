@@ -1,11 +1,11 @@
 {
-  "file": "/tmp/honeypot_scan_0xe7rjj9/6b465dc7cc21ba92d848425f8eabae3dc9f72d873d92a7b18639fd79814c7b1b_1075078/92d7549c8cf73bc0f29cea5ba8991560",
+  "file": "/tmp/honeypot_scan_d1_8bv8s/6b465dc7cc21ba92d848425f8eabae3dc9f72d873d92a7b18639fd79814c7b1b_1075078/92d7549c8cf73bc0f29cea5ba8991560",
   "filename": "92d7549c8cf73bc0f29cea5ba8991560",
   "sha256": "6b465dc7cc21ba92d848425f8eabae3dc9f72d873d92a7b18639fd79814c7b1b",
   "sha1": "84385c351cdf4cef52b816d5864431f29c615db3",
   "md5": "92d7549c8cf73bc0f29cea5ba8991560",
   "size": 5267459,
-  "scanned_at": "2026-08-02T00:07:19Z",
+  "scanned_at": "2026-08-02T05:25:49Z",
   "results": {
     "VirusTotalScanner": {
       "source": "virustotal",
@@ -39,20 +39,18 @@
     "MalwareBazaarScanner": {
       "source": "malwarebazaar",
       "known": true,
-      "submitted": true,
-      "status": "completed",
-      "sha256": "6b465dc7cc21ba92d848425f8eabae3dc9f72d873d92a7b18639fd79814c7b1b",
-      "permalink": "https://bazaar.abuse.ch/sample/6b465dc7cc21ba92d848425f8eabae3dc9f72d873d92a7b18639fd79814c7b1b/",
-      "_ok": true,
-      "signature": null,
+      "signature": "WannaCry",
       "file_type": "dll",
       "tags": [
         "dll",
         "honeypot",
-        "honeypot-xore"
+        "honeypot-xore",
+        "WannaCry"
       ],
       "first_seen": "2026-08-02 00:07:23",
-      "reporter": "Xoreyo"
+      "reporter": "Xoreyo",
+      "permalink": "https://bazaar.abuse.ch/sample/6b465dc7cc21ba92d848425f8eabae3dc9f72d873d92a7b18639fd79814c7b1b/",
+      "_ok": true
     },
     "HybridAnalysisScanner": {
       "source": "hybrid_analysis",

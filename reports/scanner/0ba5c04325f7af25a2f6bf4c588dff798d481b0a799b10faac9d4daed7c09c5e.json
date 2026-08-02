@@ -5,26 +5,27 @@
   "sha1": "57d1ad53e3d283f3d15ca17e786a447f59104ad8",
   "md5": "73b31d89a353e9c4f0ca6979d2e7f043",
   "size": 6144,
-  "scanned_at": "2026-07-29T18:30:43Z",
+  "scanned_at": "2026-08-02T05:27:38Z",
   "results": {
     "VirusTotalScanner": {
       "source": "virustotal",
       "known": true,
-      "positives": 1,
+      "positives": 2,
       "suspicious": 0,
       "total": 75,
       "stats": {
-        "malicious": 1,
+        "malicious": 2,
         "suspicious": 0,
         "undetected": 69,
         "harmless": 0,
         "timeout": 0,
         "confirmed-timeout": 0,
-        "failure": 1,
+        "failure": 0,
         "type-unsupported": 4
       },
       "names": [
         "fifaconfig.exe",
+        "0ba5c04325f7af25a2f6bf4c588dff798d481b0a799b10faac9d4daed7c09c5e.exe",
         "._cache_ZFY8OYXV8LVT381G.exe",
         "._cache_7UUG51TKNZ3PCYTH.exe",
         "._cache_2HDMMB6HLD7K041A.exe",
@@ -44,11 +45,6 @@
     "MalwareBazaarScanner": {
       "source": "malwarebazaar",
       "known": true,
-      "submitted": true,
-      "status": "completed",
-      "sha256": "0ba5c04325f7af25a2f6bf4c588dff798d481b0a799b10faac9d4daed7c09c5e",
-      "permalink": "https://bazaar.abuse.ch/sample/0ba5c04325f7af25a2f6bf4c588dff798d481b0a799b10faac9d4daed7c09c5e/",
-      "_ok": true,
       "signature": null,
       "file_type": "exe",
       "tags": [
@@ -57,7 +53,9 @@
         "honeypot-xore"
       ],
       "first_seen": "2026-07-29 18:30:48",
-      "reporter": "Xoreyo"
+      "reporter": "Xoreyo",
+      "permalink": "https://bazaar.abuse.ch/sample/0ba5c04325f7af25a2f6bf4c588dff798d481b0a799b10faac9d4daed7c09c5e/",
+      "_ok": true
     },
     "HybridAnalysisScanner": {
       "source": "hybrid_analysis",
@@ -75,20 +73,22 @@
       "source": "metadefender",
       "known": true,
       "positives": 1,
-      "total": 23,
+      "total": 31,
       "scan_result": "Infected",
       "file_info": {
         "file_size": 6144,
+        "upload_timestamp": "2026-07-31T01:07:36.944Z",
         "md5": "73B31D89A353E9C4F0CA6979D2E7F043",
         "sha1": "57D1AD53E3D283F3D15CA17E786A447F59104AD8",
         "sha256": "0BA5C04325F7AF25A2F6BF4C588DFF798D481B0A799B10FAAC9D4DAED7C09C5E",
+        "file_type": "application/x-dosexec",
         "file_type_category": "E",
         "file_type_description": "Executable File",
         "file_type_extension": "exe",
-        "display_name": "Mod Manager an experimental/ThirdParty/fifaconfig.exe"
+        "display_name": "0ba5c04325f7af25a2f6bf4c588dff798d481b0a799b10faac9d4daed7c09c5e.exe"
       },
-      "data_id": "YnpJMU1Ea3hNak54T0hJd1pqSTFPVll4aXZ2MUw5N0g2",
-      "permalink": "https://metadefender.com/results/file/YnpJMU1Ea3hNak54T0hJd1pqSTFPVll4aXZ2MUw5N0g2/threats-prevented",
+      "data_id": "bzI2MDczMTV3cEE2VS12T0VLR1Q4U05ya0Jx_mdaas",
+      "permalink": "https://metadefender.com/results/file/bzI2MDczMTV3cEE2VS12T0VLR1Q4U05ya0Jx_mdaas/threats-prevented",
       "_ok": true
     }
   }

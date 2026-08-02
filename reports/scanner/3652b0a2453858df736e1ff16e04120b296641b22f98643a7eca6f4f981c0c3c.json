@@ -5,18 +5,18 @@
   "sha1": "250383900a72c566db302b84c3eea556dee150b2",
   "md5": "7be799cd97f424c820b4efd5b6bd4a2f",
   "size": 1438752,
-  "scanned_at": "2026-07-29T18:23:47Z",
+  "scanned_at": "2026-08-02T05:26:21Z",
   "results": {
     "VirusTotalScanner": {
       "source": "virustotal",
       "known": true,
       "positives": 0,
       "suspicious": 0,
-      "total": 74,
+      "total": 75,
       "stats": {
         "malicious": 0,
         "suspicious": 0,
-        "undetected": 69,
+        "undetected": 70,
         "harmless": 0,
         "timeout": 0,
         "confirmed-timeout": 0,
@@ -24,9 +24,10 @@
         "type-unsupported": 4
       },
       "names": [
+        "StoreInstaller.exe",
+        "3652b0a2453858df736e1ff16e04120b296641b22f98643a7eca6f4f981c0c3c.exe",
         "ng67k0.exe",
-        "ChatGPT Installer.exe",
-        "StoreInstaller.exe"
+        "ChatGPT Installer.exe"
       ],
       "type_description": "Win32 EXE",
       "permalink": "https://www.virustotal.com/gui/file/3652b0a2453858df736e1ff16e04120b296641b22f98643a7eca6f4f981c0c3c",

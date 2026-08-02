@@ -5,18 +5,18 @@
   "sha1": "9ca9040f6138c73fe487b707f55447c4e0fc8973",
   "md5": "cbfcfcda250ce018c4355223365c0e01",
   "size": 256,
-  "scanned_at": "2026-07-26T18:06:10Z",
+  "scanned_at": "2026-08-02T05:25:15Z",
   "results": {
     "VirusTotalScanner": {
       "source": "virustotal",
       "known": true,
-      "positives": 0,
+      "positives": 1,
       "suspicious": 0,
       "total": 74,
       "stats": {
-        "malicious": 0,
+        "malicious": 1,
         "suspicious": 0,
-        "undetected": 60,
+        "undetected": 59,
         "harmless": 0,
         "timeout": 0,
         "confirmed-timeout": 0,
@@ -24,6 +24,8 @@
         "type-unsupported": 13
       },
       "names": [
+        "9ca9040f6138c73fe487b707f55447c4e0fc8973",
+        "a9cfcd028a90c4fd525a8e29894194e9a4aecb90924a04618474e510405426c7.unknown",
         "a9cfcd028a90c4fd525a8e29894194e9a4aecb90924a04618474e510405426c7.malware.bin"
       ],
       "type_description": "Text",
@@ -32,16 +34,16 @@
     },
     "MalwareBazaarScanner": {
       "source": "malwarebazaar",
-      "known": false,
-      "submitted": true,
-      "sha256": "",
-      "permalink": "https://bazaar.abuse.ch/sample//",
+      "known": true,
+      "submitted": false,
+      "note": "file_already_known",
+      "permalink": "https://bazaar.abuse.ch/browse/",
       "_ok": true
     },
     "HybridAnalysisScanner": {
       "source": "hybrid_analysis",
       "known": false,
-      "job_id": "6a664c95563417d37c0a5cea",
+      "job_id": "6a6ed4bdbb22a1529a0dfb1e",
       "permalink": "https://www.hybrid-analysis.com/sample/a9cfcd028a90c4fd525a8e29894194e9a4aecb90924a04618474e510405426c7",
       "status": "failed",
       "error": "sandbox analysis errored",
@@ -49,13 +51,24 @@
     },
     "MetaDefenderScanner": {
       "source": "metadefender",
-      "known": false,
-      "data_id": "bzI2MDcyNjViMVowMldjbGZRazNQaDU1VURT_mdaas",
-      "permalink": "https://metadefender.com/results/file/bzI2MDcyNjViMVowMldjbGZRazNQaDU1VURT_mdaas/threats-prevented",
-      "status": "completed",
+      "known": true,
       "positives": 0,
       "total": 21,
       "scan_result": "No Threat Detected",
+      "file_info": {
+        "file_size": 256,
+        "upload_timestamp": "2026-07-26T18:06:44.693Z",
+        "md5": "CBFCFCDA250CE018C4355223365C0E01",
+        "sha1": "9CA9040F6138C73FE487B707F55447C4E0FC8973",
+        "sha256": "A9CFCD028A90C4FD525A8E29894194E9A4AECB90924A04618474E510405426C7",
+        "file_type": "text/plain",
+        "file_type_category": "T",
+        "file_type_description": "ASCII Text",
+        "file_type_extension": "txt",
+        "display_name": "a9cfcd028a90c4fd525a8e29894194e9a4aecb90924a04618474e510405426c7.malware.bin"
+      },
+      "data_id": "bzI2MDcyNjViMVowMldjbGZRazNQaDU1VURT_mdaas",
+      "permalink": "https://metadefender.com/results/file/bzI2MDcyNjViMVowMldjbGZRazNQaDU1VURT_mdaas/threats-prevented",
       "_ok": true
     }
   }
