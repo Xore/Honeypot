@@ -59,6 +59,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+# committed samples are password-protected archives (analyze_samples.py's own
+# publish convention), not raw binaries -- reuse its extraction logic rather
+# than duplicating it, so both passes agree on what "the sample" actually is.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from analyze_samples import ARCHIVE_EXTS, expand_file  # noqa: E402
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s %(levelname)-8s %(message)s',
@@ -235,6 +241,39 @@ def extract_strings_from_binary(path: Path) -> list[str]:
     # Sort by length descending (longer = more specific)
     useful.sort(key=len, reverse=True)
     return useful[:MAX_STRINGS * 3]  # keep a wider set before final trim
+
+
+def extract_strings_from_sample(path: Path, passwords: list[str], tmpdir: Path) -> list[str]:
+    """extract_strings_from_binary, but unpacks an archived sample first.
+
+    Every committed sample is a password-protected archive
+    (analyze_samples.py's publish convention), not a raw binary -- running
+    `strings` directly against path scans the *compressed container bytes*,
+    which for a real ZIP/7z/etc. essentially never contain the payload's own
+    strings. Reuses analyze_samples.expand_file (same multi-password,
+    multi-format, recursive-archive logic the scanner submission path
+    already relies on) so both passes agree on what "the sample" actually
+    is, rather than a second, divergent unpacking implementation here.
+
+    Falls back to scanning path directly if it isn't a recognized archive
+    extension, or if unpacking it yields nothing (wrong password list,
+    corrupt archive) -- never silently returns zero strings when there was
+    at least a chance of finding something.
+    """
+    if path.suffix.lower() in ARCHIVE_EXTS:
+        members = expand_file(path, passwords, tmpdir)
+        if members:
+            strings: list[str] = []
+            seen: set[str] = set()
+            for member in members:
+                for s in extract_strings_from_binary(member):
+                    if s not in seen:
+                        seen.add(s)
+                        strings.append(s)
+            return strings
+        log.warning(f'  Could not unpack {path.name} with the configured passwords -- '
+                    f'falling back to scanning the archive container itself')
+    return extract_strings_from_binary(path)
 
 
 def score_string(s: str) -> float:
@@ -467,7 +506,8 @@ def collect_family_names(report: dict) -> list[str]:
     return [n for n in names if n and isinstance(n, str)]
 
 
-def parse_report(report_path: Path, sample_dir: Path) -> dict | None:
+def parse_report(report_path: Path, sample_dir: Path,
+                  passwords: list[str] | None = None, tmpdir: Path | None = None) -> dict | None:
     """Parse a scanner JSON report and return a profile dict."""
     try:
         data = json.loads(report_path.read_text(encoding='utf-8'))
@@ -508,10 +548,16 @@ def parse_report(report_path: Path, sample_dir: Path) -> dict | None:
 
     family_names = collect_family_names(data)
 
-    # Extract strings from the actual binary if we can find it
+    # Extract strings from the actual binary if we can find it. Samples are
+    # committed as password-protected archives (see extract_strings_from_sample's
+    # own docstring), so unpack before scanning rather than reading the
+    # archive container's own compressed bytes.
     binary_strings: list[str] = []
     if sample_path:
-        binary_strings = extract_strings_from_binary(sample_path)
+        if tmpdir is not None:
+            binary_strings = extract_strings_from_sample(sample_path, passwords or [], tmpdir)
+        else:
+            binary_strings = extract_strings_from_binary(sample_path)
         log.info(f'  Extracted {len(binary_strings)} candidate strings from {sample_path.name}')
     else:
         log.warning(f'  Sample binary not found for {filename} (sha256={sha256[:16]}…) — strings skipped')
@@ -645,7 +691,8 @@ def generate_index(output_dir: Path, new_rules: list[str], updated_rules: list[s
     index_path.write_text('\n'.join(lines) + '\n', encoding='utf-8')
 
 
-def run(report_dir: Path, sample_dir: Path, output_dir: Path) -> int:
+def run(report_dir: Path, sample_dir: Path, output_dir: Path,
+        passwords: list[str] | None = None) -> int:
     output_dir.mkdir(parents=True, exist_ok=True)
     invalid_dir = output_dir / '_invalid'
     invalid_dir.mkdir(exist_ok=True)
@@ -663,28 +710,33 @@ def run(report_dir: Path, sample_dir: Path, output_dir: Path) -> int:
     if processed_sha256s:
         log.info(f'Already processed sha256s: {len(processed_sha256s)} (will skip)')
 
-    # Group profiles by normalised family name
+    # Group profiles by normalised family name. Extraction happens into a
+    # scratch dir scoped to just this loop -- unpacked samples don't need to
+    # survive past string extraction, and freeing that disk space before the
+    # (potentially large) rule-writing phase below is worth the narrower scope.
     family_map: dict[str, list[dict]] = defaultdict(list)
     all_profiles: list[dict] = []
     skipped_existing = 0
-    for rp in reports:
-        profile = parse_report(rp, sample_dir)
-        if not profile:
-            continue
-        # Skip samples whose sha256 is already recorded in an existing .yar rule
-        if profile['sha256'] and profile['sha256'] in processed_sha256s:
-            log.info(f'  Skipping already-processed sample: {profile["filename"]} ({profile["sha256"][:16]}…)')
-            skipped_existing += 1
-            continue
-        all_profiles.append(profile)
-        raw_names = profile['family_names']
-        families  = {normalise_family(n) for n in raw_names}
-        families.discard(None)
-        if not families:
-            # No family detected — use sha256 prefix as fallback key
-            families = {f'unknown_{profile["sha256"][:8]}'}
-        for fam in families:
-            family_map[fam].append(profile)
+    with tempfile.TemporaryDirectory(prefix='honeypot-yara-extract-') as extract_tmp:
+        extract_dir = Path(extract_tmp)
+        for rp in reports:
+            profile = parse_report(rp, sample_dir, passwords, extract_dir)
+            if not profile:
+                continue
+            # Skip samples whose sha256 is already recorded in an existing .yar rule
+            if profile['sha256'] and profile['sha256'] in processed_sha256s:
+                log.info(f'  Skipping already-processed sample: {profile["filename"]} ({profile["sha256"][:16]}…)')
+                skipped_existing += 1
+                continue
+            all_profiles.append(profile)
+            raw_names = profile['family_names']
+            families  = {normalise_family(n) for n in raw_names}
+            families.discard(None)
+            if not families:
+                # No family detected — use sha256 prefix as fallback key
+                families = {f'unknown_{profile["sha256"][:8]}'}
+            for fam in families:
+                family_map[fam].append(profile)
 
     if skipped_existing:
         log.info(f'Skipped {skipped_existing} already-processed report(s)')
@@ -893,13 +945,19 @@ def main():
                         help='Root samples directory (for binary string extraction)')
     parser.add_argument('--output-dir',  default='yara-rules/auto/',
                         help='Where to write generated .yar files')
+    parser.add_argument('--archive-passwords', default='',
+                        help='Comma-separated passwords to try when unpacking a committed '
+                             'sample archive before string extraction (matches '
+                             'analyze_samples.py\'s --archive-passwords)')
     args = parser.parse_args()
+    passwords = [p.strip() for p in args.archive_passwords.split(',') if p.strip()]
 
     try:
         sys.exit(run(
             report_dir = Path(args.report_dir),
             sample_dir = Path(args.sample_dir),
             output_dir = Path(args.output_dir),
+            passwords  = passwords,
         ))
     except Exception as e:
         log.error(f'Unhandled error in generate_yara: {e}', exc_info=True)

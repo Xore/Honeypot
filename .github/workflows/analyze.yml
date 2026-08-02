@@ -20,6 +20,14 @@
 #   - Scheduled runs rescan all of samples/ with fresh API scores.
 #   - generate_yara.py runs after each scan and auto-generates YARA rules
 #     from scan results into yara-rules/auto/. Failures are non-fatal.
+#   - Some committed samples are password-protected archives rather than raw
+#     binaries (analyze_samples.py's own publish convention going forward).
+#     Both the YARA local pre-scan step and generate_yara.py unpack a
+#     sample first when it has a recognized archive extension — running
+#     YARA or `strings` against the archive container itself only ever
+#     matches the compressed bytes, never the payload. Non-archive samples
+#     (the existing raw .exe/.bin files already in samples/) are scanned
+#     directly, unchanged.
 #
 # Sample layout:
 #   samples/ELF/       Linux/IoT ELF binaries
@@ -187,13 +195,31 @@ jobs:
           fi
           mkdir -p reports/yara
           REPORT="reports/yara/yara-$(date +%Y-%m-%d-%H%M%S).txt"
+          # Committed samples are password-protected archives
+          # (analyze_samples.py's own publish convention), not raw binaries —
+          # scanning $sample directly ran YARA against the compressed ZIP
+          # container's own bytes, which essentially never match a rule
+          # written against the actual payload. Unpack first, via the same
+          # multi-password extraction logic the scanner submission step
+          # already relies on, and scan what comes out of that instead.
+          EXTRACT_DIR=$(mktemp -d)
+          trap 'rm -rf "$EXTRACT_DIR"' EXIT
           while IFS= read -r sample; do
             [ -f "$sample" ] || continue
-            find yara-rules/ -name '*.yar' -o -name '*.yara' 2>/dev/null \
-              | grep -v '_invalid' \
-              | while read -r rulefile; do
-                  yara "$rulefile" "$sample" 2>/dev/null >> "$REPORT" || true
-                done
+            mapfile -t targets < <(python3 .github/scripts/extract_for_yara.py \
+              "$sample" --dest "$EXTRACT_DIR" \
+              --passwords infected,malware,infected123,virus)
+            if [ "${#targets[@]}" -eq 0 ]; then
+              echo "::warning::could not resolve a scannable target for $sample, skipping"
+              continue
+            fi
+            for target in "${targets[@]}"; do
+              find yara-rules/ -name '*.yar' -o -name '*.yara' 2>/dev/null \
+                | grep -v '_invalid' \
+                | while read -r rulefile; do
+                    yara "$rulefile" "$target" 2>/dev/null >> "$REPORT" || true
+                  done
+            done
           done < /tmp/changed_files.txt
           # `grep -c` prints "0" AND exits 1 when there are no matches, so a
           # `|| echo 0` fallback double-counts (YARA_HITS becomes "0\n0",
@@ -268,7 +294,8 @@ jobs:
           OUTPUT=$(python3 .github/scripts/generate_yara.py \
             --report-dir reports/scanner/ \
             --sample-dir samples/ \
-            --output-dir yara-rules/auto/ 2>&1) || true
+            --output-dir yara-rules/auto/ \
+            --archive-passwords infected,malware,infected123,virus 2>&1) || true
           echo "$OUTPUT"
           NEW=$(echo "$OUTPUT"   | grep '^new_rules='     | cut -d= -f2 || echo 0)
           UPD=$(echo "$OUTPUT"   | grep '^updated_rules=' | cut -d= -f2 || echo 0)

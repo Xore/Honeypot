@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import shutil
 import tempfile
 import unittest
@@ -137,6 +138,129 @@ class GeneratorValidationTests(unittest.TestCase):
             self.assertNotIn("hash_only   = true", promoted)
             self.assertIn("strings:", promoted)
             self.assertIn("3 of ($s*)", promoted)
+
+
+class ArchivedSampleExtractionTests(unittest.TestCase):
+    """Committed samples are password-protected archives (analyze_samples.py's
+    publish convention), not raw binaries. extract_strings_from_sample must
+    unpack before running `strings`, or every generated rule is built from
+    the archive container's own compressed bytes instead of the payload.
+    """
+
+    DISTINCTIVE = "this-string-only-exists-inside-the-payload-4f8c2e"
+
+    def _zip_containing(self, dest: Path, password: str | None) -> Path:
+        import pyzipper
+
+        # analyze_samples.is_scannable() (reused via expand_file) filters
+        # extracted archive *members* by magic bytes -- a plain-text member
+        # is treated as bundled noise (READMEs etc.) and dropped, the same
+        # heuristic the scanner-submission path already relies on. A real
+        # sample is a PE/ELF/etc. binary, not bare text, so lead with a PE
+        # magic to fixture the common case realistically. Known, pre-existing
+        # limitation this inherits rather than fixes: a genuinely plain-text
+        # dropper (samples/Scripts/) extracted from an archive would also be
+        # filtered here -- out of scope for this change, since that heuristic
+        # is analyze_samples.py's own and changing it could affect what gets
+        # submitted to external scanners, not just YARA generation.
+        payload = dest / "payload.bin"
+        payload.write_bytes(
+            b"MZ" + (self.DISTINCTIVE + "\n").encode() * 4  # long enough for `strings -n 8`
+        )
+        archive = dest / "sample.zip"
+        with pyzipper.AESZipFile(
+            archive, "w",
+            compression=pyzipper.ZIP_LZMA,
+            encryption=pyzipper.WZ_AES if password else None,
+        ) as zf:
+            if password:
+                zf.setpassword(password.encode())
+                zf.setencryption(pyzipper.WZ_AES, nbits=256)
+            zf.write(payload, arcname="payload.bin")
+        payload.unlink()
+        return archive
+
+    @unittest.skipUnless(shutil.which("strings"), "strings (binutils) is not installed")
+    def test_unpacks_before_extracting_strings(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            archive = self._zip_containing(root, password="infected")
+
+            # The bug this covers: scanning the archive directly finds
+            # nothing, because `strings` on a real (LZMA/deflate-compressed)
+            # zip essentially never recovers the payload's own text.
+            raw_scan = generate_yara.extract_strings_from_binary(archive)
+            self.assertNotIn(
+                self.DISTINCTIVE, raw_scan,
+                "fixture assumption broken: the payload string is directly "
+                "recoverable from the compressed archive without unpacking, "
+                "so this test cannot distinguish unpacked from not"
+            )
+
+            unpacked = generate_yara.extract_strings_from_sample(
+                archive, passwords=["infected"], tmpdir=root / "extract"
+            )
+            self.assertIn(self.DISTINCTIVE, unpacked)
+
+    @unittest.skipUnless(shutil.which("strings"), "strings (binutils) is not installed")
+    def test_tries_each_configured_password_in_order(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            archive = self._zip_containing(root, password="malware")
+
+            unpacked = generate_yara.extract_strings_from_sample(
+                archive, passwords=["infected", "malware", "virus"],
+                tmpdir=root / "extract",
+            )
+            self.assertIn(self.DISTINCTIVE, unpacked)
+
+    @unittest.skipUnless(shutil.which("strings"), "strings (binutils) is not installed")
+    def test_falls_back_to_the_archive_itself_when_no_password_matches(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            archive = self._zip_containing(root, password="not-in-the-configured-list")
+
+            # Must not raise and must not silently return nothing without a
+            # reason -- falls back to scanning the archive container, same
+            # as if it had never been unpacked at all.
+            result = generate_yara.extract_strings_from_sample(
+                archive, passwords=["infected", "malware"], tmpdir=root / "extract"
+            )
+            self.assertIsInstance(result, list)
+
+    @unittest.skipUnless(shutil.which("strings"), "strings (binutils) is not installed")
+    def test_non_archive_extension_is_scanned_directly(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            binary = root / "payload.exe"
+            binary.write_bytes((self.DISTINCTIVE + "\n").encode() * 4)
+
+            result = generate_yara.extract_strings_from_sample(
+                binary, passwords=["infected"], tmpdir=root / "extract"
+            )
+            self.assertIn(self.DISTINCTIVE, result)
+
+    @unittest.skipUnless(shutil.which("strings"), "strings (binutils) is not installed")
+    def test_parse_report_uses_unpacked_strings_when_tmpdir_given(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            samples = root / "samples"
+            samples.mkdir()
+            archive = self._zip_containing(samples, password="infected")
+
+            report = root / "report.json"
+            report.write_text(json.dumps({
+                "sha256": "c" * 64,
+                "filename": archive.name,
+                "size": archive.stat().st_size,
+                "results": {},
+            }))
+
+            profile = generate_yara.parse_report(
+                report, samples, passwords=["infected"], tmpdir=root / "extract"
+            )
+            self.assertIsNotNone(profile)
+            self.assertIn(self.DISTINCTIVE, profile["binary_strings"])
 
 
 if __name__ == "__main__":
