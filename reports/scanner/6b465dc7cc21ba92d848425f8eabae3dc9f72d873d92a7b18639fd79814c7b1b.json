@@ -1,0 +1,91 @@
+{
+  "file": "/tmp/honeypot_scan_0xe7rjj9/6b465dc7cc21ba92d848425f8eabae3dc9f72d873d92a7b18639fd79814c7b1b_1075078/92d7549c8cf73bc0f29cea5ba8991560",
+  "filename": "92d7549c8cf73bc0f29cea5ba8991560",
+  "sha256": "6b465dc7cc21ba92d848425f8eabae3dc9f72d873d92a7b18639fd79814c7b1b",
+  "sha1": "84385c351cdf4cef52b816d5864431f29c615db3",
+  "md5": "92d7549c8cf73bc0f29cea5ba8991560",
+  "size": 5267459,
+  "scanned_at": "2026-08-02T00:07:19Z",
+  "results": {
+    "VirusTotalScanner": {
+      "source": "virustotal",
+      "known": true,
+      "positives": 64,
+      "suspicious": 0,
+      "total": 74,
+      "stats": {
+        "malicious": 64,
+        "suspicious": 0,
+        "undetected": 5,
+        "harmless": 0,
+        "timeout": 0,
+        "confirmed-timeout": 0,
+        "failure": 1,
+        "type-unsupported": 4
+      },
+      "names": [
+        "92d7549c8cf73bc0f29cea5ba8991560",
+        "1565023421769_drret_dionaeablr1_92d7549c8cf73bc0f29cea5ba8991560",
+        "1559076786138_gusag_dionaea-hkg2_92d7549c8cf73bc0f29cea5ba8991560",
+        "1554781382005_tpeej_dionaea-blr1_92d7549c8cf73bc0f29cea5ba8991560",
+        "1549046178851_pcrgb_dionaea-nyc1_92d7549c8cf73bc0f29cea5ba8991560",
+        "1544681741639_jtphx_dionaea-nyc1_92d7549c8cf73bc0f29cea5ba8991560",
+        "1544126430142_oumer_dionaea-fra1_92d7549c8cf73bc0f29cea5ba8991560"
+      ],
+      "type_description": "Win32 DLL",
+      "permalink": "https://www.virustotal.com/gui/file/6b465dc7cc21ba92d848425f8eabae3dc9f72d873d92a7b18639fd79814c7b1b",
+      "_ok": true
+    },
+    "MalwareBazaarScanner": {
+      "source": "malwarebazaar",
+      "known": true,
+      "submitted": true,
+      "status": "completed",
+      "sha256": "6b465dc7cc21ba92d848425f8eabae3dc9f72d873d92a7b18639fd79814c7b1b",
+      "permalink": "https://bazaar.abuse.ch/sample/6b465dc7cc21ba92d848425f8eabae3dc9f72d873d92a7b18639fd79814c7b1b/",
+      "_ok": true,
+      "signature": null,
+      "file_type": "dll",
+      "tags": [
+        "dll",
+        "honeypot",
+        "honeypot-xore"
+      ],
+      "first_seen": "2026-08-02 00:07:23",
+      "reporter": "Xoreyo"
+    },
+    "HybridAnalysisScanner": {
+      "source": "hybrid_analysis",
+      "known": false,
+      "job_id": "6a6e8a3c8f0c99425407e9bc",
+      "permalink": "https://www.hybrid-analysis.com/sample/6b465dc7cc21ba92d848425f8eabae3dc9f72d873d92a7b18639fd79814c7b1b",
+      "status": "completed",
+      "verdict": "malicious",
+      "threat_score": 100,
+      "threat_level": null,
+      "av_detect": 81,
+      "_ok": true
+    },
+    "MetaDefenderScanner": {
+      "source": "metadefender",
+      "known": true,
+      "positives": 28,
+      "total": 36,
+      "scan_result": "Infected",
+      "file_info": {
+        "file_size": 5267459,
+        "upload_timestamp": "2020-05-13T15:52:57.727Z",
+        "md5": "92D7549C8CF73BC0F29CEA5BA8991560",
+        "sha1": "84385C351CDF4CEF52B816D5864431F29C615DB3",
+        "sha256": "6B465DC7CC21BA92D848425F8EABAE3DC9F72D873D92A7B18639FD79814C7B1B",
+        "file_type_category": "E",
+        "file_type_description": "Dynamic Link Library",
+        "file_type_extension": "dll",
+        "display_name": "Unknown Filename"
+      },
+      "data_id": "bzIwMDUxMzU4dWUxbjNQN0ZQbmYxb3d5bVJ2",
+      "permalink": "https://metadefender.com/results/file/bzIwMDUxMzU4dWUxbjNQN0ZQbmYxb3d5bVJ2/threats-prevented",
+      "_ok": true
+    }
+  }
+}
