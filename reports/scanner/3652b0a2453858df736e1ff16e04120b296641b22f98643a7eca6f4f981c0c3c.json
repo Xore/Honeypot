@@ -5,7 +5,7 @@
   "sha1": "250383900a72c566db302b84c3eea556dee150b2",
   "md5": "7be799cd97f424c820b4efd5b6bd4a2f",
   "size": 1438752,
-  "scanned_at": "2026-08-16T02:57:59Z",
+  "scanned_at": "2026-08-23T03:00:23Z",
   "results": {
     "VirusTotalScanner": {
       "source": "virustotal",
@@ -16,14 +16,15 @@
       "stats": {
         "malicious": 0,
         "suspicious": 0,
-        "undetected": 69,
+        "undetected": 70,
         "harmless": 0,
-        "timeout": 1,
+        "timeout": 0,
         "confirmed-timeout": 0,
         "failure": 1,
         "type-unsupported": 4
       },
       "names": [
+        "250383900a72c566db302b84c3eea556dee150b2",
         "StoreInstaller.exe",
         "3652b0a2453858df736e1ff16e04120b296641b22f98643a7eca6f4f981c0c3c.exe",
         "ng67k0.exe",
