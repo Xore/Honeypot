@@ -74,3 +74,8 @@
 - New IOC files: 0
 - YARA rules generated: 0 new, 0 updated
 - Triggered by: schedule (8e22b06a359ca09a7fdc6333f90716f34493f5c5)
+
+## 2026-08-30
+- New IOC files: 0
+- YARA rules generated: 0 new, 0 updated
+- Triggered by: schedule (3c1531c94bf73839d8a2d783edc1552b287884d4)
